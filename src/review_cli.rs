@@ -22,7 +22,7 @@ pub fn run(command: ReviewCommand) -> Result<()> {
     run_with_writer(command, &mut stdout)
 }
 
-fn run_with_writer(command: ReviewCommand, out: &mut impl Write) -> Result<()> {
+pub(crate) fn run_with_writer(command: ReviewCommand, out: &mut impl Write) -> Result<()> {
     match command {
         ReviewCommand::List { repo, all } => list_sessions(&repo, all, out),
         ReviewCommand::Add {

@@ -8,6 +8,7 @@ pub mod forge;
 pub mod handler;
 pub mod hash;
 pub mod input;
+pub mod markdown;
 pub mod model;
 pub mod output;
 pub mod persistence;

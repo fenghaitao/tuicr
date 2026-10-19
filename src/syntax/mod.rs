@@ -1,5 +1,7 @@
 mod cmark;
 
+pub(crate) use cmark::MarkdownPalette;
+
 use ratatui::style::{Color, Modifier, Style};
 use std::path::Path;
 use two_face::theme::EmbeddedThemeName;
@@ -167,6 +169,43 @@ impl SyntaxHighlighter {
     /// syntect for their contents.
     pub(crate) fn highlight_markdown_body(&self, content: &str) -> HighlightedLines {
         cmark::highlight(self, content)
+    }
+
+    /// Markdown construct styles resolved from the active syntect theme, the
+    /// same ones comment-body highlighting paints with. The rendered Markdown
+    /// view reuses them so a preview matches its source view.
+    pub(crate) fn markdown_palette(&self) -> &MarkdownPalette {
+        &self.markdown_palette
+    }
+
+    /// Highlight the body of a fenced code block whose info string starts with
+    /// `token` (`rust`, `py`, `bash`, ...), one entry per line, trailing line
+    /// endings dropped. `None` when no grammar matches the token, so the caller
+    /// can render the block plain. Resolution matches comment-body fences.
+    pub(crate) fn highlight_fenced_code(
+        &self,
+        token: &str,
+        content: &str,
+    ) -> Option<Vec<Vec<(Style, String)>>> {
+        if token.is_empty() {
+            return None;
+        }
+        let syntax = self.syntax_set.find_syntax_by_token(token)?;
+        let mut lines = syntect::easy::HighlightLines::new(syntax, &self.theme);
+        let mut out = Vec::new();
+        for line in content.split_inclusive('\n') {
+            let runs = lines.highlight_line(line, &self.syntax_set).ok()?;
+            out.push(
+                runs.into_iter()
+                    .map(|(style, text)| {
+                        let text = text.trim_end_matches(['\n', '\r']);
+                        (Self::syntect_to_ratatui_style(style), text.to_string())
+                    })
+                    .filter(|(_, text)| !text.is_empty())
+                    .collect(),
+            );
+        }
+        Some(out)
     }
 
     /// Run syntect line-by-line against a resolved syntax, converting to

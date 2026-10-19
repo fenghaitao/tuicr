@@ -541,6 +541,22 @@ impl App {
                     };
                     (gap_id.file_idx, c)
                 }
+                // A rendered row matches every line of its block; the first
+                // such row is the block's first, where a jump should land.
+                AnnotatedLine::MarkdownRow {
+                    file_idx,
+                    source: Some(range),
+                    ..
+                } => {
+                    let c = if range.start <= target_lineno && target_lineno <= range.end {
+                        target_lineno
+                    } else if target_lineno < range.start {
+                        range.start
+                    } else {
+                        range.end
+                    };
+                    (*file_idx, Some(c))
+                }
                 _ => continue,
             };
             if file_idx != current_file {
@@ -638,6 +654,11 @@ impl App {
             AnnotatedLine::ExpandedContext { gap_id, line_idx } => self
                 .get_expanded_line(gap_id, *line_idx)
                 .map(|l| l.content.as_str()),
+            // The drawn text after the unified gutter, so mouse columns,
+            // selection, and visual copy work on what the reader sees.
+            AnnotatedLine::MarkdownRow {
+                file_idx, row_idx, ..
+            } => self.markdown_row_text(*file_idx, *row_idx),
             _ => None,
         }
     }
@@ -1128,6 +1149,15 @@ impl App {
 
         if file.is_binary || file.hunks.is_empty() {
             content_lines = 1;
+        } else if let Some(doc) = self.markdown_doc(file_idx) {
+            // Rendered Markdown: label row + rendered rows + every visible line
+            // comment, each placed after some block. Mirrors the `MarkdownRow`
+            // walk in `rebuild_annotations`.
+            content_lines = 1;
+            if !self.should_collapse_hunk(file_idx, 0) {
+                content_lines += doc.rows.len();
+                comment_lines += self.markdown_comment_rows(path, commit_set.as_ref());
+            }
         } else {
             let line_comments = self.session.files.get(path).map(|r| &r.line_comments);
 
@@ -1510,8 +1540,15 @@ impl App {
     /// line_annotations.len() in sync with the rendered Vec<Line>.
     pub fn sync_viewport_width(&mut self, new_width: usize) {
         if self.diff_state.viewport_width != new_width {
+            // Rendered Markdown re-wraps on resize, so its rows move; keep the
+            // cursor on the same source line.
+            let anchor = self
+                .markdown_view_active()
+                .then(|| self.cursor_source_anchor())
+                .flatten();
             self.diff_state.viewport_width = new_width;
             self.rebuild_annotations();
+            self.restore_source_anchor(anchor);
         }
     }
 
@@ -1529,6 +1566,13 @@ impl App {
                 new_lineno,
                 ..
             }) => Self::line_for_side(self.effective_cursor_side(), *old_lineno, *new_lineno),
+            // A rendered row stands for its block; its first line is where an
+            // editor opens. Comments take the whole range instead, see
+            // `markdown_range_at_cursor`.
+            Some(AnnotatedLine::MarkdownRow {
+                source: Some(range),
+                ..
+            }) => Some((range.start, LineSide::New)),
             _ => None,
         }
     }

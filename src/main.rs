@@ -373,6 +373,12 @@ fn main() -> anyhow::Result<()> {
         if cfg.diff_view.as_deref() == Some("side-by-side") && !app.is_pristine_mode {
             app.diff_view_mode = app::DiffViewMode::SideBySide;
         }
+        // Rendered Markdown applies in the unified layout; with a
+        // side-by-side default, Markdown files open as source.
+        if cfg.markdown_view.as_deref() == Some("rendered") {
+            app.markdown_rendered = true;
+            app.rebuild_annotations();
+        }
         if let Some(wrap) = cfg.wrap {
             app.diff_state.wrap_lines = wrap;
         }

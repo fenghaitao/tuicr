@@ -89,6 +89,42 @@ filters are a view, not an edit.
 Filters are session-local: they are not written to the review session and reset
 when tuicr restarts, but they survive a `:e` reload.
 
+### Rendered Markdown
+
+`:markdown` (or `:set markdown!`) renders whole Markdown documents instead of showing
+their source; `:set markdown` / `:set nomarkdown` pick a view explicitly, and
+`markdown_view = "rendered"` in `config.toml` opens in rendered view. It applies to
+`.md` / `.markdown` files opened with `--file` (a file or a directory) or
+`--all-files` — targets that show the complete file. Markdown in Git diffs, commit
+ranges, and pull requests keeps its source view, so deleted lines stay visible. The
+view is global for the session and is never written to `config.toml`.
+
+Rendered rows are grouped into blocks: a heading, a paragraph, a list item, a table
+row, or a whole fenced code block. The gutter shows each block's first source line,
+and the header shows `MARKDOWN · L40–43` for the block under the cursor.
+
+- `c` comments on the block under the cursor. The comment is stored against the
+  block's source lines (`spec.md:40-43`), exactly as a range comment made in source
+  view, so it reads the same in either view, at any width, and through
+  `tuicr review comments`.
+- `v` selects across blocks; the comment covers the smallest source range holding
+  them. Visual `y` copies the rendered text.
+- A comment made in source view on a narrower range shows once, after the block that
+  holds its last line. Switch back with `:markdown` to choose lines precisely.
+- Source that renders nothing (HTML comments, link reference definitions) shows as a
+  `⋯ lines 12–14 hidden in rendered view` row that can be commented on.
+- `/` searches the rendered text, `:{N}` and `--line N` land on the block holding
+  line `N`, `e` opens `$EDITOR` at the block's first line, and `R` marks the
+  document's single hunk reviewed.
+- Rows re-wrap on resize and the cursor stays on its block. Links show their
+  destination as text, images collapse to `⧉ alt text`, and Mermaid fences to a
+  placeholder; nothing is fetched or executed.
+
+Rendered view uses the unified layout: turning it on from side-by-side switches to
+unified, and `:diff` back to side-by-side shows Markdown as source. If a reload
+brings changed content for a document that has comments, tuicr warns that the
+comments were anchored to an earlier version.
+
 ### Hiding reviewed files
 
 `:set noreviewed` / `:set reviewed` / `:set reviewed!` (or the bare `:reviewed`)
@@ -226,6 +262,8 @@ In command mode,
 | `:copy-url` | Copy the open PR URL to clipboard (PR mode) |
 | `:summary` | Show all pending local-draft comments; `j`/`k` select and `Enter` jumps |
 | `:diff` | Toggle diff view (unified / side-by-side) |
+| `:markdown` (`:set markdown!`) | Toggle rendered Markdown view |
+| `:set markdown` / `:set nomarkdown` | Rendered / source Markdown view |
 | `:theme` | Open the runtime theme picker (live preview; `/` filters, `Enter` applies and saves, `Esc` reverts) |
 | `:theme <name>` | Apply and save `<name>` directly, without opening the picker |
 | `:focus` (`:f`) | Toggle single-file view |

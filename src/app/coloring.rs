@@ -84,6 +84,7 @@ impl AnnotatedLine {
             | Self::LineComment { .. }
             | Self::RemoteThreadLine { .. }
             | Self::BinaryOrEmpty { .. }
+            | Self::MarkdownRow { .. }
             | Self::Spacing => None,
         }
     }

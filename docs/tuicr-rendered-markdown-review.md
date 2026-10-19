@@ -1,26 +1,27 @@
 # Rendered Markdown review in tuicr
 
-Status: Proposed  
+Status: Implemented (stages 1–3)  
 Date: 2026-10-19  
-Audience: tuicr implementation contributors and Conductor/AutoDML maintainers
+Audience: tuicr implementation contributors
+
+Workflow integration for Conductor/AutoDML is a separate note:
+[tuicr-rendered-markdown-autodml.md](tuicr-rendered-markdown-autodml.md).
 
 ## Decision
 
-Add a rendered Markdown view to tuicr, adapting the renderer and source mapping from herdr-reviewr. Start with complete-document annotation through `tuicr --file`; retain tuicr's existing source-code diff review, saved review sessions, and JSON comment interface.
+Add a rendered Markdown view to tuicr, adapting the renderer and source mapping from herdr-reviewr. Start with complete-document annotation through `tuicr --file` and `tuicr --all-files`; retain tuicr's existing source-code diff review, saved review sessions, and JSON comment interface.
 
 The reviewer must be able to read a rendered specification, select a paragraph or table row, and leave a comment anchored to the corresponding lines in the original `.md` file. Switching to source view must show the same comment. Rendering is a presentation mode, not a new document or comment format.
 
 Rendered Markdown diffs are a subsequent phase. They require explicit handling of deleted content and changes that disappear when rendered.
 
-## Problem and workflow
+## Problem
 
-Conductor/AutoDML work requires human review of both specifications and implementation. Specifications may need approval before implementation, including sections that have no Git changes. Implementation review happens at task and iteration boundaries, and findings need to survive interruptions and be consumable by the workflow.
+Specifications need human review as complete documents, including sections that have no Git changes, and the findings need to survive interruptions and be consumable by tooling.
 
-The inspected AutoDML workflow records an iteration's starting commit as `base_0`, packages the iteration diff, writes `final-review.md`, and routes findings into a fix and re-review cycle. A terminal application's latest agent turn is not an adequate substitute for those task and iteration boundaries.
+Tuicr provides persisted comments, file/hunk review marks, commit-range review, and a JSON review CLI. Version 0.27.0 was tested with a Markdown file containing headings, emphasis, a table, lists, and fenced code. It displayed styled Markdown source, retaining markup delimiters. Inspection of its source and controls found no rendered-document preview.
 
-Tuicr provides persisted comments, file/hunk review marks, commit-range review, and a JSON review CLI. Its installed version, 0.27.0, was tested with a Markdown file containing headings, emphasis, a table, lists, and fenced code. It displayed styled Markdown source, retaining markup delimiters. Inspection of its current source and controls found no rendered-document preview.
-
-Herdr-reviewr supports rendered Markdown and comments made directly in that view. Its renderer maps display content back to source ranges. Its existing tests cover equivalence between source and rendered comments, table-row mappings, resizing, and comments remaining visible across view changes. Its in-memory comment lifecycle is less suitable for the durable feedback artifacts required here.
+Herdr-reviewr supports rendered Markdown and comments made directly in that view. Its renderer maps display content back to source ranges. Its tests cover equivalence between source and rendered comments, table-row mappings, resizing, and comments remaining visible across view changes. Its in-memory comment lifecycle is less suitable for durable feedback; tuicr's session store already provides that.
 
 ## Goals
 
@@ -33,36 +34,51 @@ Herdr-reviewr supports rendered Markdown and comments made directly in that view
 
 ## Initial scope
 
-The first release supports `.md` and `.markdown` documents opened through `--file`, including Markdown files within a directory review. Other files in the same review retain their existing presentation.
+Rendered view applies to `.md` and `.markdown` files whose review target is the complete file: `--file <path>`, `--file <dir>` (directory review), and `--all-files`. In code these are the `FileBackend` sources (`VcsType::File`), where each file is a single hunk starting at line 1. Other files in the same review keep their existing presentation, as do Markdown files in Git diffs, commit ranges, and pull requests.
 
-The renderer supports headings, paragraphs, emphasis, links as text, lists, task lists, blockquotes, fenced code with syntax highlighting, and tables. Table rows retain individual source mappings. Long content wraps to the available width. If a table cannot be represented legibly, show its source with an explicit fallback indication.
+The renderer supports headings, paragraphs, emphasis, links as text, lists, task lists, blockquotes, fenced code with syntax highlighting, tables, thematic breaks, and `<details>` blocks (always shown expanded). Table rows retain individual source mappings. Long content wraps to the available width. If a table cannot be represented legibly at any column floor, it shows its source text instead, dimmed.
 
-The first release does not implement rendered Git diffs, MDX component execution, HTML/browser rendering, Mermaid execution, image loading, or automatic semantic reanchoring after source edits. Existing diff review remains available for Markdown source changes as well as code.
+The first release does not implement rendered Git diffs, MDX component execution, HTML/browser rendering, Mermaid execution (a fence collapses to a `⧉ mermaid <kind>` placeholder), image loading (an image collapses to `⧉ alt text`), clickable links, or automatic semantic reanchoring after source edits. Existing diff review remains available for Markdown source changes as well as code.
 
 ## User experience
 
 ### Specification review
 
-Existing invocation:
-
 ```bash
 tuicr --file specs/design.md
+tuicr --file specs/          # every file in the directory
+tuicr --all-files            # every tracked file in the repository
 ```
 
-Proposed additions:
+Commands, following tuicr's boolean `:set` convention (`:set X`, `:set noX`, `:set X!`, plus a short alias):
 
-- `:markdown` toggles the focused document between source and rendered views.
-- `:set markdown=source` and `:set markdown=rendered` choose an explicit mode.
-- A `markdown_view = "source"` configuration setting preserves the current default; users may select `"rendered"`.
-- A visible label identifies the current mode and the source range under the cursor.
+| Command | Effect |
+| --- | --- |
+| `:markdown` / `:set markdown!` | Toggle rendered view |
+| `:set markdown` | Rendered view |
+| `:set nomarkdown` | Source view |
 
-These commands and the configuration setting are proposals, not current tuicr features. Keep `m` and `M` available for tuicr's existing comment navigation.
+The mode is global: it applies to every eligible file in the review, not per file. Like every other `:set` toggle it lasts for the session and never writes `config.toml`.
 
-In rendered mode, the reviewer moves to a paragraph, presses `c`, writes a comment, and saves it through the existing composer. Visual selection may span several rendered blocks. Tuicr records the corresponding source range, not terminal row numbers.
+Configuration: `markdown_view = "source"` (the default) or `"rendered"` chooses the startup mode.
 
-For example, a paragraph occupying source lines 40–43 may occupy two or six screen rows depending on the pane width. A comment on that paragraph continues to reference `spec.md:40–43` at either width.
+`m` and `M` keep their existing comment-navigation meaning. No single-key binding is added; tuicr reserves single strokes for vim motions.
+
+Labels:
+
+- Each rendered file's hunk-header row reads `rendered Markdown · lines 1–N · :markdown for source`, replacing the `@@ -0,0 +1,N @@` header.
+- The header bar shows a `MARKDOWN` chip while rendered view is on, followed by the source range under the cursor (`MARKDOWN · L40–43`).
+- The gutter shows the first source line of each block on that block's first row; continuation and gap rows have a blank gutter. With `relative_line_numbers`, distances count rendered rows, matching the existing behaviour for source rows.
+
+In rendered mode the reviewer moves to a paragraph, presses `c`, writes a comment, and saves it through the existing composer. `v` starts a visual selection that may span several rendered blocks. Tuicr records the corresponding source range, not terminal row numbers, and the composer header and `VISUAL L40-43` status show that range before saving.
+
+A paragraph occupying source lines 40–43 may occupy two or six screen rows depending on the pane width. A comment on that paragraph references `spec.md:40-43` at either width.
 
 Switching to source view reveals those source lines and the existing comment. Source view remains the way to choose a narrower source-line range.
+
+### Side-by-side layout
+
+Rendered view is a single-column layout and applies only in the unified diff layout. Turning it on while side-by-side is active switches to unified and says so. Switching to side-by-side with `:diff` while rendered view is on shows Markdown files as source in side-by-side; returning to unified shows them rendered again. `--all-files` is already unified-only.
 
 ### Code review
 
@@ -73,141 +89,147 @@ tuicr -w
 tuicr -r BASE_COMMIT..HEAD
 ```
 
-For AutoDML, review a complete spec and the relevant implementation scope in separate panes or sessions. The workflow selects the recorded task/iteration baseline and reviewed paths. Do not infer review scope from pane activity or replace the existing review package with an arbitrary branch diff.
-
 ### Comments and persistence
 
 Comments are separate review data; they do not modify the Markdown document. Saving, reopening, comment types, authors, exports, and review marks continue to use tuicr's existing behavior.
 
-The renderer must not change session identity. Source and rendered modes are two views of the same review target, not separate sessions. Creating a comment in one view and editing it in the other updates the same comment ID.
+The renderer does not change session identity. Source and rendered modes are two views of the same review target, not separate sessions. Creating a comment in one view and editing it in the other updates the same comment ID.
 
 ## Architecture
 
 ### 1. Adapt the Markdown renderer
 
-Both inspected projects use Rust, ratatui 0.30, pulldown-cmark 0.13.4, syntect, and unicode-width. The parser and terminal text types already align. This reduces dependency work but does not make the renderer a drop-in module.
+Both projects use Rust, ratatui 0.30, pulldown-cmark 0.13.4, syntect, and unicode-width. The parser and terminal text types already align. This reduces dependency work but does not make the renderer a drop-in module.
 
-Adapt reviewr's document renderer behind a small tuicr-owned interface. Replace its application-specific palette and highlighter dependencies with adapters to tuicr's theme and syntax highlighter. Do not import reviewr's application state, Herdr control code, or comment store.
+The renderer lives in `src/markdown/` as an attributed, vendored adaptation of reviewr's `src/markdown.rs` (see Reuse and attribution). It sits behind a small tuicr-owned interface:
 
-Tuicr's existing `src/syntax/cmark.rs` styles Markdown comment bodies while preserving source text. Keep that behavior separate from document layout; adding a preview must not unexpectedly change comment composition or PR-description rendering.
+- Styles come from tuicr's existing `MarkdownPalette` (`src/syntax/cmark.rs`), which is resolved from the active syntect theme, plus tuicr `Theme` colors for prose, borders, and muted text. The preview therefore matches the colors source view uses for the same constructs.
+- Fenced code is highlighted with tuicr's `SyntaxHighlighter`, resolving the fence's language token the same way comment bodies do.
+- Nothing from reviewr's application state, Herdr control code, palette, highlighter, or comment store is imported.
 
-Proposed conceptual output:
+`cmark::highlight` keeps styling comment bodies while preserving source text. Document layout is a separate path; adding the preview does not change comment composition or PR-description rendering.
+
+Output:
 
 ```rust
-struct RenderedDocument {
-    rows: Vec<RenderedRow>,
-    hidden_source_ranges: Vec<SourceRange>,
+pub struct RenderedDocument {
+    pub rows: Vec<RenderedRow>,
+    pub blocks: Vec<RenderedBlock>,
 }
 
-struct RenderedRow {
-    line: ratatui::text::Line<'static>,
-    source: Option<SourceRange>,
-    block_id: BlockId,
+pub struct RenderedRow {
+    pub line: ratatui::text::Line<'static>,
+    pub text: String,             // plain text, for search, copy, and mouse hit-testing
+    pub block: Option<usize>,     // None for the blank gap rows between blocks
 }
 
-struct SourceRange {
-    start: u32,
-    end: u32,
+pub struct RenderedBlock {
+    pub range: LineRange,         // inclusive, one-based source lines
+    pub rows: std::ops::Range<usize>,
+    pub hidden: bool,             // a source-only marker for content that renders nothing
 }
 ```
 
-Names are illustrative. `SourceRange` is inclusive and one-based, matching tuicr's existing comment ranges. `BlockId` is a transient identity within one source snapshot, not a permanent anchor across edits.
+`LineRange` is tuicr's existing comment range type. Block indices are transient identities within one source snapshot, not anchors across edits.
 
-### 2. Introduce a rendered-document annotation
+### 2. Row model: pre-wrapped rows
 
-Tuicr currently uses `AnnotatedLine` to connect displayed content to cursor movement, selection, comments, and source locations. Add a document-row variant containing file identity, rendered row identity, and an optional source range. Avoid pretending a rendered paragraph is an ordinary single-line diff row.
+The renderer wraps to a width, so rendered rows are pre-wrapped, the same way comment boxes already are. One `AnnotatedLine::MarkdownRow { file_idx, row_idx, source }` annotation is emitted per rendered row, with `source: Option<LineRange>` copied from the row's block.
 
-Route single-line comments, visual selections, comment navigation, and editor opening through shared source-location helpers. Existing diff annotations continue to resolve their old/new line locations as before; document annotations resolve a new-side source range.
-
-Keep rendered-mode dispatch limited to supported full-file review targets in the first release. Opening a Markdown Git diff must not silently substitute its complete current document and hide deleted content.
+- The wrap width is the unified content width: `viewport_width − unified_gutter(lineno_width)`. Rows use the unified gutter layout (cursor indicator, line-number field, two-column marker), so mouse hit-testing, column-to-character mapping, and the comment bar column need no special cases.
+- A width change already rebuilds annotations through `App::sync_viewport_width`; that rebuild re-renders the documents at the new width.
+- `annotation_row_height` measures `MarkdownRow` with the same wrap pass as diff content rows. Because rows already fit, the result is 1 except for grapheme-width edge cases, and both sides agree by construction.
+- `:set wrap!` does not change the rendered layout, because rows already fit the viewport.
+- `App::file_render_height` counts rendered files as: header + label row + rendered rows + every visible line comment of the file. It must stay in lockstep with the annotation builder and the unified renderer, like every other row kind.
 
 ### 3. Define source mapping explicitly
 
 | Rendered content | Comment anchor |
 | --- | --- |
 | Heading or paragraph | Whole source block |
-| List item | Item's source range, excluding nested sibling units |
+| List item | The item's own lines, excluding nested child lists, which are their own blocks |
 | Table row | Source row that produced it |
-| Code block | Code block's source range, including its fences in the first release |
+| Table header rule | The delimiter row (`\|---\|`) |
+| Code block | Code block's source range, including its fences |
 | Wrapped continuation | Same source range as the block it continues |
-| Synthetic padding or decoration | No independent anchor |
-| Content hidden by rendering | Explicit source-only marker with its source range |
+| Gap row between blocks | No anchor |
+| Content hidden by rendering | Source-only marker row with its source range |
 
-For a selection spanning multiple blocks, use the smallest contiguous source range containing the selected anchorable blocks. Blank lines between those blocks are included. Display that range before submission so the reviewer can switch to source for finer control.
+A block's range ends at its last non-blank line.
+
+For a selection spanning multiple blocks, use the smallest contiguous source range containing the selected anchorable blocks. Blank lines between those blocks are included. The selection's range is shown before submission so the reviewer can switch to source for finer control.
 
 A rendered paragraph maps to a source range; it does not support character-precise comments. File-level and review-level comments remain available when a location is inappropriate.
 
-Never silently discard content that renders nothing. Use reviewr's source-map approach to identify omitted material, such as HTML comments or reference definitions, and provide an actionable marker that returns to source view.
+Content that renders nothing is never discarded silently. HTML comments, link reference definitions, and other source lines that produce no output become a marker row: `⋯ lines 12–14 hidden in rendered view (:markdown for source)`. It is placed in source order, is selectable and commentable, and anchors to its range.
 
 ### 4. Reuse the existing comment model
 
-Convert the resolved location to tuicr's existing `CommentTarget::Line` or `CommentTarget::LineRange`, including file path and `LineSide::New`, and pass it through the existing add-comment path.
+The resolved location becomes tuicr's existing `comment_line` / `comment_line_range` state: `CommentTarget::Line` for a one-line block, `CommentTarget::LineRange` otherwise, always `LineSide::New`. It goes through the existing `save_comment` → `add_comment_to_session` path.
 
-The MVP needs no new persisted comment fields and no changes to the JSON export contract. Presentation mode, rendered row numbers, and terminal width must not enter saved comment anchors. File and review-level targets remain unchanged.
+No new persisted comment fields and no change to the JSON export contract. Presentation mode, rendered row numbers, and terminal width never enter saved comment anchors.
 
-Comments created on a narrower range in source mode must remain discoverable in rendered mode. A block intersecting a comment range exposes the comment without rewriting its original source range or duplicating its card for every wrapped row.
+### 5. Comment card placement
 
-### 5. Handle resize, navigation, and reload
+Line comments are stored under their range's end line (`line_comments: HashMap<u32, Vec<Comment>>`), and source view draws the card after that line. Rendered view places each stored key `L` as follows:
 
-Cache rendered output by document snapshot, width, theme, and renderer options. Do not parse the whole document on every frame. Invalidate the cache on source reload, width changes, or relevant theme/options changes.
+1. The card renders after the last row of the block whose range contains `L`.
+2. If no block contains `L` (a blank line, or a line before the first block), it attaches to the last block starting before `L`, or to the first block if none does.
+3. Keys that land on the same block render in ascending line order, each key's comments in stored order, followed by the composer when a new comment targets that key.
 
-Before resizing or switching views, capture a source location and its viewport-relative position. Rebuild the display, then locate the corresponding block. Preserve comments by their source anchors and preserve an active comment draft's original target, regardless of reflow.
+So every comment of the file is shown exactly once in rendered view, whatever its range. A source-made comment on lines 10–30 spanning three blocks appears once, after the block containing line 30. Its range bar covers the rendered rows from the first block intersecting line 10 down to the card, rather than one row per source line as in source view.
 
-Search, keyboard selection, mouse hit-testing, scrolling, editor opening, and comment jumps must all resolve against the active display map. The MVP uses rendered text for rendered-view search; source view remains available to search markup that is omitted from the preview. Copying a visual selection copies visible rendered text, while comment creation resolves source ranges.
+### 6. Navigation, search, and source-line features
 
-This feature does not add semantic reanchoring across edits. AutoDML should pause edits while a human reviews a snapshot. If the source changes during a review, invalidate the rendered map, preserve stored comments, and warn that anchors require revalidation. Never present old coordinates as newly verified anchors. A view toggle or resize alone must not produce such a warning.
+These resolve against the active display map:
 
-## Conductor/AutoDML integration
+- `--line N` and `go_to_source_line`: land on the first row of the block containing `N`, or the nearest block.
+- `e` (open in `$EDITOR`): opens at the first source line of the block under the cursor.
+- `/` search: matches rendered row text. Source view remains available to search markup the preview omits.
+- Visual-mode `y`: copies the rendered text of the selection (tuicr's existing visual copy); comment creation resolves source ranges.
+- `R` (hunk reviewed): a full-file source is a single hunk, so `R` on any rendered row marks that hunk, and a reviewed hunk collapses to its label row as in source view.
+- Mouse click, drag selection, scrolling, and comment navigation work as they do for source rows.
 
-The Markdown feature is useful standalone. A Conductor adapter is a separate integration task; it is not a prerequisite for shipping the renderer.
+### 7. Resize, toggle, and reload
 
-Proposed workflow:
+Documents are cached per file by source content hash, wrap width, and syntax-highlighter identity. Nothing is parsed on idle frames. A theme switch re-renders with the new palette; the layout does not depend on colors, so row counts stay the same.
 
-1. At the existing specification review boundary, open the complete spec with tuicr.
-2. Let the user write comments in rendered or source view.
-3. Discover and record the exact session ID/path through `tuicr review list`.
-4. Read comments using `tuicr review comments --session SESSION`.
-5. Save exported feedback alongside the workflow's artifacts, together with target identity and source snapshot information.
-6. Supply spec feedback to the spec revision step; supply implementation feedback to the appropriate fix step.
+Before toggling the view or resizing, tuicr captures the source line under the cursor and its viewport-relative position, rebuilds, and returns to the row covering that line.
 
-Example of the existing export mechanism:
-
-```bash
-tuicr review comments --session SESSION > human-spec-review.json
-```
-
-The adapter must record the repository or standalone document path, reviewed commit where applicable, content digest for a mutable spec, review scope, and completion decision. Those are proposed workflow metadata, not new tuicr comment fields.
-
-Do not infer approval from zero comments or a CLI exit code. Review progress is useful evidence, but the existing Conductor human decision remains the acceptance boundary. Also do not make a source-code TUI the authority for DML/Simics correctness: existing contract checks, builds, tests, and automated review remain part of AutoDML's validation.
-
-The deployed AutoDML setup contains a VP repository and a nested workflow repository. Resolve each review against the actual owning repository or explicit spec path; do not assume all specs and production files share one Git root.
+This feature does not add semantic reanchoring across edits. If a reload (`:e`, the diff watcher) brings different content for a rendered file that has comments, tuicr warns that its comment anchors were made against an earlier version. Stored comments are kept as they are. This relies on tuicr's existing file content hashes, which already drive reload invalidation of review marks. A view toggle or resize alone never produces the warning.
 
 ## Reuse and attribution
 
-Adapt these parts of herdr-reviewr:
+Adapted from herdr-reviewr:
 
 - `src/markdown.rs`: document layout, tables, wrapping, and source metadata.
-- `src/rendered.rs`: display state and row identity concepts.
-- `src/app.rs`: rendered selection to source-anchor behavior.
-- `tests/app_flow.rs` and renderer tests: regression cases for comment equivalence, resizing, tables, and source/rendered switching.
+- `src/rendered.rs`: block/unit identity concepts used for the block index.
+- Renderer tests: regression cases for tables, wrapping, nesting, hidden content, and source mapping.
 
-Reviewr's `src/marks.rs` handles change ownership and markers in rendered diffs. Study it for phase two; do not pull the full diff machinery into the full-document MVP.
+Reviewr's `src/marks.rs` handles change ownership and markers in rendered diffs. It is reference material for phase two; the full diff machinery is not part of the full-document MVP.
 
-The renderer is application code, not a published independent library. Prefer an attributed vendored module with tuicr-specific adapters over a runtime dependency on reviewr. Record the imported upstream revision and local adaptations so subsequent fixes can be compared deliberately.
+The renderer is application code, not a published library, so it is vendored with tuicr-specific adapters rather than added as a runtime dependency. The module header records the upstream revision and lists local adaptations, so later upstream fixes can be compared deliberately.
 
-Both inspected repositories declare MIT licenses. Retain reviewr's copyright and license notice with copied or substantially adapted code and include attribution for adapted tests. Check any additional assets separately; no themes or binary syntax assets need to be copied for the proposed adapter.
+Both repositories use the MIT license. `src/markdown/LICENSE-reviewr` keeps reviewr's copyright and license notice for the adapted code and tests. No themes or binary syntax assets are copied.
 
 ## Delivery sequence
 
 | Stage | Deliverable | Exit condition |
 | --- | --- | --- |
 | 1. Renderer | Adapted document renderer and source metadata | Layout and mapping fixtures pass |
-| 2. Annotation | Source/rendered toggle and comment creation in `--file` mode | Comments retain source anchors in either view |
-| 3. Persistence and interaction | Session reopening, CLI export, search, mouse, resize, editor jumps | Complete review loop works in a terminal |
-| 4. AutoDML adapter | Explicit session selection and exported review artifacts | Feedback reaches the intended workflow step |
-| 5. Rendered diffs | New-side rendering, deletion/hidden-change markers, scope handling | Every change remains inspectable and commentable |
+| 2. Annotation | Rendered toggle and comment creation in full-file modes | Comments keep source anchors in either view |
+| 3. Persistence and interaction | Session reopening, CLI export, search, mouse, resize, editor jumps, `--line`, docs | Complete review loop works in a terminal |
+| 4. Rendered diffs | New-side rendering, deletion/hidden-change markers, scope handling | Every change remains inspectable and commentable |
 
-Stage four can ship separately from the tuicr contribution. Stage five should be a separate design/implementation increment rather than a requirement for the first usable spec reviewer.
+Stage 4 is a separate design/implementation increment, not a requirement for the first usable spec reviewer.
+
+User-facing documentation ships with stage 3, per AGENTS.md:
+
+- `README.md`: feature bullet and the `:markdown` command.
+- `docs/KEYBINDINGS.md`: the `:markdown` / `:set markdown` rows and prose.
+- `docs/CONFIG.md`: the `markdown_view` option row and full-example line.
+- `src/ui/help_popup.rs`: the command entries.
+- `AGENTS.md`: the `src/markdown/` module, the `MarkdownRow` annotation, and the lockstep invariant.
 
 ## Verification and acceptance
 
@@ -215,39 +237,35 @@ The central invariant is: **the same source selection produces the same persiste
 
 Required checks:
 
-- Renderer fixtures cover headings, multi-line paragraphs, nested lists, tables, Unicode, code fences, and content omitted from rendering.
-- Each rendered selectable block has a valid source range; decoration cannot create a misleading anchor.
-- Equivalent source/rendered comments have the same path, side, range, content, and author.
-- Selecting a paragraph or table row, resizing, and saving does not change the pending target.
-- Source-created comments remain visible and editable after switching to rendered mode, including narrow ranges within a larger rendered block.
+- Renderer fixtures cover headings, multi-line paragraphs, nested lists, tables (including the header rule and the source fallback), Unicode, code fences, and content omitted from rendering.
+- Each rendered selectable block has a valid source range; gap rows and decoration have none.
+- Equivalent source and rendered comments have the same path, side, range, content, and author.
+- Selecting a paragraph or table row at two widths produces the same pending target.
+- Source-created comments remain visible after switching to rendered mode, including narrow ranges within a larger rendered block and ranges ending on blank lines.
+- `annotation_row_height`, `file_render_height`, and the unified renderer agree on row counts for rendered files.
 - Saving and reopening preserves comments, IDs, types, and file review marks.
 - `tuicr review comments` produces the existing JSON shape for rendered-created comments.
-- Source reload invalidates the display map and warns about unverified old anchors.
-- Markdown code fences are highlighted but not executed; links/images require no network activity for rendering.
+- Reloading changed content of a commented file warns; toggling or resizing does not.
+- Markdown code fences are highlighted but not executed; links and images cause no network activity.
 - Existing source-code diff, visual-selection, comment navigation, persistence, and export tests continue to pass.
-- A terminal smoke test covers opening a real spec, creating a rendered comment, toggling source, resizing, saving, reopening, and reading the comment through the CLI. Include a narrow pane and a wide pane, and keyboard and mouse selection.
+- A terminal smoke test covers opening a real spec, creating a rendered comment, toggling source, resizing, saving, reopening, and reading the comment through the CLI, with a narrow and a wide pane.
 
-Use existing renderer/performance tests to check that idle frames reuse cached documents. Add measurements before setting a new latency budget; no performance claims are made by this design.
+No performance budget is set by this design; documents render once per content/width change, and idle frames reuse the cache.
 
-## Risks and choices for implementation
+## Risks
 
-- Reviewr's renderer depends on its own palette and highlighter. Keep those dependencies behind a small adapter rather than importing unrelated application modules.
-- Tuicr's annotation and navigation logic frequently assumes one source line per annotation. Adding a rendered range requires auditing those consumers, not just changing drawing code.
-- Rendered blocks are coarser than source lines. Make the source range visible and retain immediate source switching.
-- Documentation on a moving branch can differ from a released binary. Pin the reference implementation and test the actual tuicr revision being changed.
-- Existing tuicr session identity and file-mode persistence need regression coverage before promising long-lived AutoDML review artifacts.
+- Tuicr's annotation, height, and renderer code paths each walk files independently and must agree row for row. `MarkdownRow` adds one more row kind to all three; tests assert the counts agree.
+- Rendered blocks are coarser than source lines. The source range is always shown and source view is one command away.
+- A vendored renderer drifts from upstream. The recorded revision and adaptation list keep comparisons deliberate.
 
-Proposed defaults are source view, block-level rendered anchors, and a command-based toggle. Confirm these against tuicr's current contribution conventions during implementation. A reusable Markdown-rendering crate may be worth discussing upstream later, but is not required for this port.
+A reusable Markdown-rendering crate may be worth discussing with reviewr upstream later, but is not required for this port.
 
 ## References and inspected revisions
 
-- [tuicr source, revision `475846bf71b44d9853d6d668e1a7c90c500f6f4d`](https://github.com/agavra/tuicr/tree/475846bf71b44d9853d6d668e1a7c90c500f6f4d), package version 0.27.0.
+- [tuicr source, revision `475846bf71b44d9853d6d668e1a7c90c500f6f4d`](https://github.com/agavra/tuicr/tree/475846bf71b44d9853d6d668e1a7c90c500f6f4d), package version 0.27.0. This fork (`fenghaitao/tuicr`) branches from that revision.
 - [tuicr file backend](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/src/vcs/file.rs).
 - [tuicr annotation model](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/src/app/mod.rs), [selection](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/src/app/visual.rs), and [comment creation](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/src/app/comments.rs).
 - [tuicr review CLI](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/docs/REVIEW_CLI.md).
 - [herdr-reviewr source, revision `4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8`](https://github.com/persiyanov/herdr-reviewr/tree/4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8), package version 0.47.0.
 - [reviewr Markdown renderer](https://github.com/persiyanov/herdr-reviewr/blob/4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8/src/markdown.rs), [rendered state](https://github.com/persiyanov/herdr-reviewr/blob/4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8/src/rendered.rs), and [mapping/interaction tests](https://github.com/persiyanov/herdr-reviewr/blob/4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8/tests/app_flow.rs).
-- [tuicr license](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/LICENSE) and [reviewr license](https://github.com/persiyanov/herdr-reviewr/blob/4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8/LICENSE).
-- Local AutoDML evidence: `/home/hfeng1/conductor-autodml/README.md`, `phases/shared/implement.yaml` (`base_0`, `final_package`, `final_review`, and fix/re-review routing), and `lib/implement/review-package.py`.
-
-This document records source inspection and the manual tuicr Markdown display check. It does not claim that the proposed feature or a Conductor adapter has been implemented or tested.
+- [tuicr license](https://github.com/agavra/tuicr/blob/475846bf71b44d9853d6d668e1a7c90c500f6f4d/LICENSE) and [reviewr license](https://github.com/persiyanov/herdr-reviewr/blob/4d7f2b49cd11bbe19b5bf7714d7c18e6e81c43a8/LICENSE), both MIT.

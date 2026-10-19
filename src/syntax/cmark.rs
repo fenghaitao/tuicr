@@ -30,16 +30,16 @@ use super::{HighlightedLines, SyntaxHighlighter};
 /// Resolved at construction rather than per call: building a `Highlighter` and
 /// walking the theme's selectors for nine scopes is small but strictly wasted
 /// work on a path that runs for every comment on every frame.
-pub(super) struct MarkdownPalette {
-    base: Style,
-    heading: Style,
-    bold: Style,
-    italic: Style,
-    code: Style,
-    link: Style,
-    quote: Style,
-    list: Style,
-    strike: Style,
+pub(crate) struct MarkdownPalette {
+    pub(crate) base: Style,
+    pub(crate) heading: Style,
+    pub(crate) bold: Style,
+    pub(crate) italic: Style,
+    pub(crate) code: Style,
+    pub(crate) link: Style,
+    pub(crate) quote: Style,
+    pub(crate) list: Style,
+    pub(crate) strike: Style,
 }
 
 impl MarkdownPalette {

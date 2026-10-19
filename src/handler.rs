@@ -70,6 +70,9 @@ const COMMAND_SPECS: &[CommandSpec] = &[
         CommandKind::ToggleShowReviewed,
     ),
     CommandSpec::new(&["diff"], CommandKind::Diff),
+    CommandSpec::new(&["markdown", "set markdown!"], CommandKind::ToggleMarkdown),
+    CommandSpec::new(&["set markdown"], CommandKind::SetMarkdown(true)),
+    CommandSpec::new(&["set nomarkdown"], CommandKind::SetMarkdown(false)),
     CommandSpec::new(&["focus", "f"], CommandKind::Focus),
     CommandSpec::new(&["stage"], CommandKind::Stage),
     CommandSpec::new(
@@ -155,6 +158,8 @@ enum CommandKind {
     SetShowReviewed(bool),
     ToggleShowReviewed,
     Diff,
+    ToggleMarkdown,
+    SetMarkdown(bool),
     Focus,
     Stage,
     Targets(TargetTab),
@@ -974,6 +979,14 @@ fn dispatch_command(app: &mut App, kind: CommandKind) -> CommandAfterDispatch {
         }
         CommandKind::Diff => {
             app.toggle_diff_view_mode();
+            CommandAfterDispatch::ExitCommandMode
+        }
+        CommandKind::ToggleMarkdown => {
+            app.toggle_markdown_rendered();
+            CommandAfterDispatch::ExitCommandMode
+        }
+        CommandKind::SetMarkdown(rendered) => {
+            app.set_markdown_rendered(rendered);
             CommandAfterDispatch::ExitCommandMode
         }
         CommandKind::Focus => {
@@ -1802,7 +1815,14 @@ fn handle_shared_normal_action(app: &mut App, action: Action) {
         Action::EnterSearchMode => app.enter_search_mode(),
         Action::AddLineComment => {
             let line = app.get_line_at_cursor();
-            if line.is_some() {
+            if let Some(range) = app.markdown_range_at_cursor() {
+                // A rendered row comments on its whole block: stored under the
+                // range's end line, like a visual-selection comment.
+                app.enter_comment_mode(false, Some((range.end, LineSide::New)));
+                if !range.is_single() {
+                    app.comment_line_range = Some((range, LineSide::New));
+                }
+            } else if line.is_some() {
                 app.enter_comment_mode(false, line);
             } else {
                 app.set_message("Move cursor to a diff line to add a line comment");
@@ -1933,6 +1953,26 @@ mod command_tests {
         assert_eq!(
             command_spec_for("copy-url").map(|spec| spec.kind),
             Some(CommandKind::CopyUrl)
+        );
+    }
+
+    #[test]
+    fn parses_every_markdown_view_command_form() {
+        assert_eq!(
+            command_spec_for("markdown").map(|spec| spec.kind),
+            Some(CommandKind::ToggleMarkdown)
+        );
+        assert_eq!(
+            command_spec_for("set markdown!").map(|spec| spec.kind),
+            Some(CommandKind::ToggleMarkdown)
+        );
+        assert_eq!(
+            command_spec_for("set markdown").map(|spec| spec.kind),
+            Some(CommandKind::SetMarkdown(true))
+        );
+        assert_eq!(
+            command_spec_for("set nomarkdown").map(|spec| spec.kind),
+            Some(CommandKind::SetMarkdown(false))
         );
     }
 

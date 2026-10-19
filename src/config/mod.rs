@@ -178,6 +178,10 @@ pub struct AppConfig {
     /// `:set reviewed!`.
     pub show_reviewed: Option<bool>,
     pub diff_view: Option<String>,
+    /// How whole-file Markdown documents (`--file`, `--all-files`) open:
+    /// `"source"` (the default) or `"rendered"`. Toggle at runtime with
+    /// `:markdown`.
+    pub markdown_view: Option<String>,
     /// Inline commit selector display order: `"descending"` (newest-first,
     /// the default) or `"ascending"` (oldest-first).
     pub commit_order: Option<String>,
@@ -265,6 +269,7 @@ const KNOWN_KEYS: &[&str] = &[
     "show_commits",
     "show_reviewed",
     "diff_view",
+    "markdown_view",
     "commit_order",
     "initial_commit_selection",
     "ignore_whitespace",
@@ -603,6 +608,12 @@ fn load_config_from_path(path: &Path) -> Result<ConfigLoadOutcome> {
             table,
             "diff_view",
             &["unified", "side-by-side"],
+            &mut warnings,
+        ),
+        markdown_view: read_enum(
+            table,
+            "markdown_view",
+            &["source", "rendered"],
             &mut warnings,
         ),
         relative_line_numbers: read_bool(table, "relative_line_numbers", &mut warnings),
@@ -1238,6 +1249,34 @@ mod tests {
             Some("gutter")
         );
         assert!(outcome.warnings.is_empty());
+    }
+
+    // markdown_view
+
+    #[test]
+    fn should_parse_markdown_view_rendered() {
+        let outcome = parse_config("markdown_view = \"rendered\"\n");
+        assert_eq!(
+            outcome
+                .config
+                .as_ref()
+                .and_then(|cfg| cfg.markdown_view.as_deref()),
+            Some("rendered")
+        );
+        assert!(outcome.warnings.is_empty());
+    }
+
+    #[test]
+    fn should_warn_and_ignore_markdown_view_with_invalid_value() {
+        let outcome = parse_config("markdown_view = \"preview\"\n");
+        assert_eq!(
+            outcome
+                .config
+                .as_ref()
+                .and_then(|cfg| cfg.markdown_view.as_deref()),
+            None
+        );
+        assert_eq!(outcome.warnings.len(), 1);
     }
 
     // diff_view

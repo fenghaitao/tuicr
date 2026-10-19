@@ -104,6 +104,18 @@ impl App {
     pub fn visual_selection_line_range(&self) -> Option<(LineRange, LineSide)> {
         let sel = self.get_visual_selection()?;
         let (start, end) = sel.ordered();
+        // Rendered Markdown rows: the smallest contiguous source range holding
+        // every selected block. Gap rows and comment boxes inside the
+        // selection add nothing.
+        let rendered = (start.annotation_idx..=end.annotation_idx)
+            .filter_map(|idx| match self.line_annotations.get(idx)? {
+                AnnotatedLine::MarkdownRow { source, .. } => *source,
+                _ => None,
+            })
+            .reduce(|a, b| LineRange::new(a.start.min(b.start), a.end.max(b.end)));
+        if let Some(range) = rendered {
+            return Some((range, LineSide::New));
+        }
         let start_line = self.annotation_line_for_side(start.annotation_idx, start.side);
         let end_line = self.annotation_line_for_side(end.annotation_idx, end.side);
         let start_ln = start_line?;

@@ -391,6 +391,8 @@ impl App {
             | AnnotatedLine::SideBySideLine {
                 file_idx, hunk_idx, ..
             } => Some((*file_idx, *hunk_idx)),
+            // A rendered document is its file's single hunk.
+            AnnotatedLine::MarkdownRow { file_idx, .. } => Some((*file_idx, 0)),
             _ => None,
         }
     }

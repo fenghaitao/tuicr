@@ -759,6 +759,13 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
         ]),
         Line::from(vec![
             Span::styled(
+                "  :markdown ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Toggle rendered Markdown (set markdown / nomarkdown)"),
+        ]),
+        Line::from(vec![
+            Span::styled(
                 "  :theme    ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),

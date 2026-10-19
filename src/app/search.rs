@@ -404,6 +404,9 @@ impl App {
                 Some(Cow::Borrowed(content.content.as_str()))
             }
             AnnotatedLine::HunkHeader { file_idx, hunk_idx } => {
+                if let Some(label) = self.markdown_label(*file_idx) {
+                    return Some(Cow::Owned(label));
+                }
                 let file = self.diff_files.get(*file_idx)?;
                 let hunk = file.hunks.get(*hunk_idx)?;
                 Some(Cow::Borrowed(hunk.header.as_str()))
@@ -449,6 +452,11 @@ impl App {
                     .unwrap_or("");
                 Some(Cow::Owned(format!("{} {}", del_content, add_content)))
             }
+            AnnotatedLine::MarkdownRow {
+                file_idx, row_idx, ..
+            } => self
+                .markdown_row_text(*file_idx, *row_idx)
+                .map(Cow::Borrowed),
             AnnotatedLine::RemoteThreadLine { .. }
             | AnnotatedLine::Spacing
             | AnnotatedLine::ReviewedBanner { .. } => None,

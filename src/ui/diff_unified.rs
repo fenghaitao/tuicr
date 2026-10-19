@@ -68,6 +68,10 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
     // Update viewport height for scroll calculations
     app.diff_state.viewport_height = inner.height as usize;
     app.diff_inner_area = Some(inner);
+    // Sync before building rows: a width change rebuilds the annotations (and
+    // re-wraps rendered documents), and the rows built below must match them.
+    app.sync_viewport_width(inner.width as usize);
+    app.restyle_markdown_docs();
 
     // Reset comment input annotation offset (will be set if a comment input box is rendered)
     app.comment_input_annotation_offset = None;
@@ -99,6 +103,15 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
     // Records per-comment bar info — populated at each line-level comment
     // call site and consumed by the bar paint pass at the end of render.
     let mut comment_bars: Vec<crate::ui::diff_view::CommentBarAnchor> = Vec::new();
+    // Set when a line-comment composer renders; applied once the file walk,
+    // which borrows `app`, is done.
+    let mut line_comment_input_offset: Option<(usize, usize, usize)> = None;
+    let comment_frame = CommentFrame {
+        current_line_idx,
+        comment_width,
+        inner_width: inner.width as usize,
+        visible: (visible_start, visible_end),
+    };
 
     let is_review_comment_mode =
         app.input_mode == InputMode::Comment && app.comment_is_review_level;
@@ -460,6 +473,23 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
                 ),
             ]));
             line_idx += 1;
+        } else if let Some(doc) = app.markdown_doc(file_idx) {
+            render_markdown_document(
+                &mut CommentRows {
+                    lines: &mut lines,
+                    line_idx: &mut line_idx,
+                    cursor_line: &mut comment_cursor_logical_line,
+                    cursor_column: &mut comment_cursor_column,
+                    input_box: &mut comment_input_box_range,
+                    input_offset: &mut line_comment_input_offset,
+                    bars: &mut comment_bars,
+                },
+                &mut content_rows,
+                app,
+                &comment_frame,
+                (file_idx, path),
+                doc,
+            );
         } else {
             // Get line comments for this file
             let line_comments = app
@@ -708,387 +738,47 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
                         line_idx += 1;
                     }
 
-                    // Show line comments for both old side (deleted lines) and new side (added/context)
-                    // Old side comments (for deleted lines)
+                    // Line comments, remote threads, and the composer for this
+                    // row's old side (deleted lines) and new side (added/context).
+                    let mut rows = CommentRows {
+                        lines: &mut lines,
+                        line_idx: &mut line_idx,
+                        cursor_line: &mut comment_cursor_logical_line,
+                        cursor_column: &mut comment_cursor_column,
+                        input_box: &mut comment_input_box_range,
+                        input_offset: &mut line_comment_input_offset,
+                        bars: &mut comment_bars,
+                    };
                     if let Some(old_ln) = diff_line.old_lineno {
-                        // Check if we're adding/editing a comment on this line (old side)
-                        let is_line_comment_mode = app.input_mode == InputMode::Comment
-                            && !app.comment_is_file_level
-                            && file_idx == app.diff_state.current_file_idx
-                            && app.comment_line == Some((old_ln, LineSide::Old));
-
-                        if let Some(comments) = line_comments.get(&old_ln) {
-                            for comment in comments {
-                                if comment.side == Some(LineSide::Old)
-                                    && app.comment_visible(comment)
-                                {
-                                    // Skip if this comment is being edited
-                                    let is_being_edited = is_line_comment_mode
-                                        && app.editing_comment_id.as_ref() == Some(&comment.id);
-
-                                    if is_being_edited {
-                                        let line_range = app
-                                            .comment_line_range
-                                            .map(|(r, _)| r)
-                                            .or_else(|| Some(LineRange::single(old_ln)));
-                                        let (input_lines, cursor_info) =
-                                            comment_panel::format_comment_input_lines(
-                                                &app.theme,
-                                                comment_type_presentation(app, &app.comment_type),
-                                                &app.comment_buffer,
-                                                app.comment_cursor,
-                                                line_range,
-                                                true,
-                                                comment_width,
-                                                app.comment_vim_mode_label()
-                                                    .as_ref()
-                                                    .map(|(t, w)| (t.as_str(), *w)),
-                                                app.supports_keyboard_enhancement,
-                                            );
-                                        comment_cursor_logical_line =
-                                            Some(line_idx + cursor_info.line_offset);
-                                        comment_cursor_column = 1 + cursor_info.column;
-                                        let box_top_row = line_idx;
-                                        comment_input_box_range = Some((
-                                            line_idx,
-                                            line_idx + input_lines.len().saturating_sub(1),
-                                        ));
-                                        let annotations_replaced = App::comment_display_lines(
-                                            comment,
-                                            inner.width as usize,
-                                        );
-                                        app.comment_input_annotation_offset = Some((
-                                            line_idx,
-                                            input_lines.len(),
-                                            annotations_replaced,
-                                        ));
-
-                                        for mut input_line in input_lines {
-                                            let indicator =
-                                                cursor_indicator(line_idx, current_line_idx);
-                                            input_line.spans.insert(
-                                                0,
-                                                Span::styled(
-                                                    indicator,
-                                                    styles::current_line_indicator_style(
-                                                        &app.theme,
-                                                    ),
-                                                ),
-                                            );
-                                            lines.push(input_line);
-                                            line_idx += 1;
-                                        }
-                                        push_comment_bar(
-                                            &mut comment_bars,
-                                            box_top_row,
-                                            line_range,
-                                        );
-                                    } else {
-                                        let line_range = comment
-                                            .line_range
-                                            .or_else(|| Some(LineRange::single(old_ln)));
-                                        let box_top_row = line_idx;
-                                        let rows = App::comment_display_lines(
-                                            comment,
-                                            inner.width as usize,
-                                        );
-                                        // The bar is recorded either way: it is
-                                        // painted above the box, so it can be on
-                                        // screen while the box itself is not.
-                                        if !comment_box_visible(
-                                            line_idx,
-                                            rows,
-                                            (visible_start, visible_end),
-                                        ) {
-                                            skip_comment_box(&mut lines, &mut line_idx, rows);
-                                        } else {
-                                            let comment_lines = comment_panel::format_comment_lines(
-                                                &app.theme,
-                                                comment_type_presentation(
-                                                    app,
-                                                    &comment.comment_type,
-                                                ),
-                                                &comment.content,
-                                                line_range,
-                                                comment_width,
-                                                (comment.author != app.username)
-                                                    .then_some(comment.author.as_str()),
-                                            );
-                                            for mut comment_line in comment_lines {
-                                                let is_current = line_idx == current_line_idx;
-                                                let indicator =
-                                                    if is_current { "▶" } else { " " };
-                                                comment_line.spans.insert(
-                                                    0,
-                                                    Span::styled(
-                                                        indicator,
-                                                        styles::current_line_indicator_style(
-                                                            &app.theme,
-                                                        ),
-                                                    ),
-                                                );
-                                                lines.push(comment_line);
-                                                line_idx += 1;
-                                            }
-                                        }
-                                        push_comment_bar(
-                                            &mut comment_bars,
-                                            box_top_row,
-                                            line_range,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        // Render remote review threads anchored at this old-side line.
-                        render_remote_threads_for_anchor(
-                            &mut lines,
-                            &mut line_idx,
-                            current_line_idx,
+                        render_line_comments_at(
+                            &mut rows,
                             app,
-                            path,
-                            old_ln,
-                            LineSide::Old,
-                            &mut comment_bars,
+                            &comment_frame,
+                            (file_idx, path),
+                            line_comments,
+                            (old_ln, LineSide::Old),
+                            &source_bar_height,
                         );
-
-                        // Render inline input for new line comment (old side)
-                        if is_line_comment_mode && app.editing_comment_id.is_none() {
-                            let line_range = app
-                                .comment_line_range
-                                .map(|(r, _)| r)
-                                .or_else(|| Some(LineRange::single(old_ln)));
-                            let (input_lines, cursor_info) =
-                                comment_panel::format_comment_input_lines(
-                                    &app.theme,
-                                    comment_type_presentation(app, &app.comment_type),
-                                    &app.comment_buffer,
-                                    app.comment_cursor,
-                                    line_range,
-                                    false,
-                                    comment_width,
-                                    app.comment_vim_mode_label()
-                                        .as_ref()
-                                        .map(|(t, w)| (t.as_str(), *w)),
-                                    app.supports_keyboard_enhancement,
-                                );
-                            comment_cursor_logical_line = Some(line_idx + cursor_info.line_offset);
-                            comment_cursor_column = 1 + cursor_info.column;
-                            let box_top_row = line_idx;
-                            comment_input_box_range =
-                                Some((line_idx, line_idx + input_lines.len().saturating_sub(1)));
-                            app.comment_input_annotation_offset =
-                                Some((line_idx, input_lines.len(), 0));
-
-                            for mut input_line in input_lines {
-                                let indicator = cursor_indicator(line_idx, current_line_idx);
-                                input_line.spans.insert(
-                                    0,
-                                    Span::styled(
-                                        indicator,
-                                        styles::current_line_indicator_style(&app.theme),
-                                    ),
-                                );
-                                lines.push(input_line);
-                                line_idx += 1;
-                            }
-                            push_comment_bar(&mut comment_bars, box_top_row, line_range);
-                        }
                     }
-
-                    // New side comments (for added/context lines)
                     if let Some(new_ln) = diff_line.new_lineno {
-                        // Check if we're adding/editing a comment on this line (new side)
-                        let is_line_comment_mode = app.input_mode == InputMode::Comment
-                            && !app.comment_is_file_level
-                            && file_idx == app.diff_state.current_file_idx
-                            && app.comment_line == Some((new_ln, LineSide::New));
-
-                        if let Some(comments) = line_comments.get(&new_ln) {
-                            for comment in comments {
-                                if comment.side != Some(LineSide::Old)
-                                    && app.comment_visible(comment)
-                                {
-                                    // Skip if this comment is being edited
-                                    let is_being_edited = is_line_comment_mode
-                                        && app.editing_comment_id.as_ref() == Some(&comment.id);
-
-                                    if is_being_edited {
-                                        let line_range = app
-                                            .comment_line_range
-                                            .map(|(r, _)| r)
-                                            .or_else(|| Some(LineRange::single(new_ln)));
-                                        let (input_lines, cursor_info) =
-                                            comment_panel::format_comment_input_lines(
-                                                &app.theme,
-                                                comment_type_presentation(app, &app.comment_type),
-                                                &app.comment_buffer,
-                                                app.comment_cursor,
-                                                line_range,
-                                                true,
-                                                comment_width,
-                                                app.comment_vim_mode_label()
-                                                    .as_ref()
-                                                    .map(|(t, w)| (t.as_str(), *w)),
-                                                app.supports_keyboard_enhancement,
-                                            );
-                                        comment_cursor_logical_line =
-                                            Some(line_idx + cursor_info.line_offset);
-                                        comment_cursor_column = 1 + cursor_info.column;
-                                        let box_top_row = line_idx;
-                                        comment_input_box_range = Some((
-                                            line_idx,
-                                            line_idx + input_lines.len().saturating_sub(1),
-                                        ));
-                                        let annotations_replaced = App::comment_display_lines(
-                                            comment,
-                                            inner.width as usize,
-                                        );
-                                        app.comment_input_annotation_offset = Some((
-                                            line_idx,
-                                            input_lines.len(),
-                                            annotations_replaced,
-                                        ));
-
-                                        for mut input_line in input_lines {
-                                            let indicator =
-                                                cursor_indicator(line_idx, current_line_idx);
-                                            input_line.spans.insert(
-                                                0,
-                                                Span::styled(
-                                                    indicator,
-                                                    styles::current_line_indicator_style(
-                                                        &app.theme,
-                                                    ),
-                                                ),
-                                            );
-                                            lines.push(input_line);
-                                            line_idx += 1;
-                                        }
-                                        push_comment_bar(
-                                            &mut comment_bars,
-                                            box_top_row,
-                                            line_range,
-                                        );
-                                    } else {
-                                        let line_range = comment
-                                            .line_range
-                                            .or_else(|| Some(LineRange::single(new_ln)));
-                                        let box_top_row = line_idx;
-                                        let rows = App::comment_display_lines(
-                                            comment,
-                                            inner.width as usize,
-                                        );
-                                        // The bar is recorded either way: it is
-                                        // painted above the box, so it can be on
-                                        // screen while the box itself is not.
-                                        if !comment_box_visible(
-                                            line_idx,
-                                            rows,
-                                            (visible_start, visible_end),
-                                        ) {
-                                            skip_comment_box(&mut lines, &mut line_idx, rows);
-                                        } else {
-                                            let comment_lines = comment_panel::format_comment_lines(
-                                                &app.theme,
-                                                comment_type_presentation(
-                                                    app,
-                                                    &comment.comment_type,
-                                                ),
-                                                &comment.content,
-                                                line_range,
-                                                comment_width,
-                                                (comment.author != app.username)
-                                                    .then_some(comment.author.as_str()),
-                                            );
-                                            for mut comment_line in comment_lines {
-                                                let indicator =
-                                                    cursor_indicator(line_idx, current_line_idx);
-                                                comment_line.spans.insert(
-                                                    0,
-                                                    Span::styled(
-                                                        indicator,
-                                                        styles::current_line_indicator_style(
-                                                            &app.theme,
-                                                        ),
-                                                    ),
-                                                );
-                                                lines.push(comment_line);
-                                                line_idx += 1;
-                                            }
-                                        }
-                                        push_comment_bar(
-                                            &mut comment_bars,
-                                            box_top_row,
-                                            line_range,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        // Render remote review threads anchored at this new-side line.
-                        render_remote_threads_for_anchor(
-                            &mut lines,
-                            &mut line_idx,
-                            current_line_idx,
+                        render_line_comments_at(
+                            &mut rows,
                             app,
-                            path,
-                            new_ln,
-                            LineSide::New,
-                            &mut comment_bars,
+                            &comment_frame,
+                            (file_idx, path),
+                            line_comments,
+                            (new_ln, LineSide::New),
+                            &source_bar_height,
                         );
-
-                        // Render inline input for new line comment (new side)
-                        if is_line_comment_mode && app.editing_comment_id.is_none() {
-                            let line_range = app
-                                .comment_line_range
-                                .map(|(r, _)| r)
-                                .or_else(|| Some(LineRange::single(new_ln)));
-                            let (input_lines, cursor_info) =
-                                comment_panel::format_comment_input_lines(
-                                    &app.theme,
-                                    comment_type_presentation(app, &app.comment_type),
-                                    &app.comment_buffer,
-                                    app.comment_cursor,
-                                    line_range,
-                                    false,
-                                    comment_width,
-                                    app.comment_vim_mode_label()
-                                        .as_ref()
-                                        .map(|(t, w)| (t.as_str(), *w)),
-                                    app.supports_keyboard_enhancement,
-                                );
-                            comment_cursor_logical_line = Some(line_idx + cursor_info.line_offset);
-                            comment_cursor_column = 1 + cursor_info.column;
-                            let box_top_row = line_idx;
-                            comment_input_box_range =
-                                Some((line_idx, line_idx + input_lines.len().saturating_sub(1)));
-                            app.comment_input_annotation_offset =
-                                Some((line_idx, input_lines.len(), 0));
-
-                            for mut input_line in input_lines {
-                                let indicator = cursor_indicator(line_idx, current_line_idx);
-                                input_line.spans.insert(
-                                    0,
-                                    Span::styled(
-                                        indicator,
-                                        styles::current_line_indicator_style(&app.theme),
-                                    ),
-                                );
-                                lines.push(input_line);
-                                line_idx += 1;
-                            }
-                            push_comment_bar(&mut comment_bars, box_top_row, line_range);
-                        }
                     }
                 }
             }
         }
 
-        // End-of-file gap (after all hunks, not for deleted files)
+        // End-of-file gap (after all hunks, not for deleted files, and not
+        // for a rendered document, which always shows the whole file)
         if file.status != FileStatus::Deleted
+            && app.markdown_doc(file_idx).is_none()
             && matches!(
                 app.diff_source,
                 DiffSource::WorkingTree
@@ -1208,6 +898,10 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
             )));
         }
         line_idx += 1;
+    }
+
+    if line_comment_input_offset.is_some() {
+        app.comment_input_annotation_offset = line_comment_input_offset;
     }
 
     // Auto-scroll so the comment input box stays visible while the user types.
@@ -1383,6 +1077,321 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
             let screen_row_abs = inner.y + visual_row;
 
             app.comment_cursor_screen_pos = Some((screen_col, screen_row_abs));
+        }
+    }
+}
+
+/// Mutable render state the inline line-comment rows write into.
+struct CommentRows<'a> {
+    lines: &'a mut Vec<Line<'static>>,
+    line_idx: &'a mut usize,
+    cursor_line: &'a mut Option<usize>,
+    cursor_column: &'a mut u16,
+    input_box: &'a mut Option<(usize, usize)>,
+    input_offset: &'a mut Option<(usize, usize, usize)>,
+    bars: &'a mut Vec<crate::ui::diff_view::CommentBarAnchor>,
+}
+
+/// Per-frame geometry shared by every inline comment box.
+struct CommentFrame {
+    current_line_idx: usize,
+    comment_width: usize,
+    inner_width: usize,
+    visible: (usize, usize),
+}
+
+/// Rows a range bar covers above a comment box in source view: one per line.
+fn source_bar_height(_box_top_row: usize, range: LineRange) -> usize {
+    (range.end - range.start + 1) as usize
+}
+
+fn push_bar(
+    bars: &mut Vec<crate::ui::diff_view::CommentBarAnchor>,
+    box_top_row: usize,
+    line_range: Option<LineRange>,
+    bar_height: &dyn Fn(usize, LineRange) -> usize,
+) {
+    if let Some(range) = line_range {
+        bars.push(crate::ui::diff_view::CommentBarAnchor {
+            box_top_row,
+            height: bar_height(box_top_row, range),
+        });
+    }
+}
+
+/// Render the line comments stored at `(ln, side)`, the remote threads
+/// anchored there, and the composer when a new comment targets it. Shared by
+/// diff rows and rendered Markdown rows so both place comment boxes alike;
+/// `bar_height` sizes the range bar drawn above each box.
+#[allow(clippy::too_many_arguments)]
+fn render_line_comments_at(
+    out: &mut CommentRows<'_>,
+    app: &App,
+    frame: &CommentFrame,
+    (file_idx, path): (usize, &std::path::Path),
+    line_comments: &std::collections::HashMap<u32, Vec<crate::model::Comment>>,
+    (ln, side): (u32, LineSide),
+    bar_height: &dyn Fn(usize, LineRange) -> usize,
+) {
+    let current_line_idx = frame.current_line_idx;
+    let indicator_style = styles::current_line_indicator_style(&app.theme);
+    let is_line_comment_mode = app.input_mode == InputMode::Comment
+        && !app.comment_is_file_level
+        && file_idx == app.diff_state.current_file_idx
+        && app.comment_line == Some((ln, side));
+    let on_side = |comment: &crate::model::Comment| match side {
+        LineSide::Old => comment.side == Some(LineSide::Old),
+        LineSide::New => comment.side != Some(LineSide::Old),
+    };
+    let composer_range = || {
+        app.comment_line_range
+            .map(|(r, _)| r)
+            .or_else(|| Some(LineRange::single(ln)))
+    };
+
+    if let Some(comments) = line_comments.get(&ln) {
+        for comment in comments {
+            if !on_side(comment) || !app.comment_visible(comment) {
+                continue;
+            }
+            let is_being_edited =
+                is_line_comment_mode && app.editing_comment_id.as_ref() == Some(&comment.id);
+
+            if is_being_edited {
+                let line_range = composer_range();
+                let (input_lines, cursor_info) = comment_panel::format_comment_input_lines(
+                    &app.theme,
+                    comment_type_presentation(app, &app.comment_type),
+                    &app.comment_buffer,
+                    app.comment_cursor,
+                    line_range,
+                    true,
+                    frame.comment_width,
+                    app.comment_vim_mode_label()
+                        .as_ref()
+                        .map(|(t, w)| (t.as_str(), *w)),
+                    app.supports_keyboard_enhancement,
+                );
+                let box_top_row = *out.line_idx;
+                *out.cursor_line = Some(box_top_row + cursor_info.line_offset);
+                *out.cursor_column = 1 + cursor_info.column;
+                *out.input_box = Some((
+                    box_top_row,
+                    box_top_row + input_lines.len().saturating_sub(1),
+                ));
+                let annotations_replaced = App::comment_display_lines(comment, frame.inner_width);
+                *out.input_offset = Some((box_top_row, input_lines.len(), annotations_replaced));
+
+                for mut input_line in input_lines {
+                    let indicator = cursor_indicator(*out.line_idx, current_line_idx);
+                    input_line
+                        .spans
+                        .insert(0, Span::styled(indicator, indicator_style));
+                    out.lines.push(input_line);
+                    *out.line_idx += 1;
+                }
+                push_bar(out.bars, box_top_row, line_range, bar_height);
+            } else {
+                let line_range = comment.line_range.or_else(|| Some(LineRange::single(ln)));
+                let box_top_row = *out.line_idx;
+                let rows = App::comment_display_lines(comment, frame.inner_width);
+                // The bar is recorded either way: it is painted above the box,
+                // so it can be on screen while the box itself is not.
+                if !comment_box_visible(box_top_row, rows, frame.visible) {
+                    skip_comment_box(out.lines, out.line_idx, rows);
+                } else {
+                    let comment_lines = comment_panel::format_comment_lines(
+                        &app.theme,
+                        comment_type_presentation(app, &comment.comment_type),
+                        &comment.content,
+                        line_range,
+                        frame.comment_width,
+                        (comment.author != app.username).then_some(comment.author.as_str()),
+                    );
+                    for mut comment_line in comment_lines {
+                        let indicator = cursor_indicator(*out.line_idx, current_line_idx);
+                        comment_line
+                            .spans
+                            .insert(0, Span::styled(indicator, indicator_style));
+                        out.lines.push(comment_line);
+                        *out.line_idx += 1;
+                    }
+                }
+                push_bar(out.bars, box_top_row, line_range, bar_height);
+            }
+        }
+    }
+
+    // Remote review threads anchored at this line.
+    render_remote_threads_for_anchor(
+        out.lines,
+        out.line_idx,
+        current_line_idx,
+        app,
+        path,
+        ln,
+        side,
+        out.bars,
+    );
+
+    // Inline input for a new line comment.
+    if is_line_comment_mode && app.editing_comment_id.is_none() {
+        let line_range = composer_range();
+        let (input_lines, cursor_info) = comment_panel::format_comment_input_lines(
+            &app.theme,
+            comment_type_presentation(app, &app.comment_type),
+            &app.comment_buffer,
+            app.comment_cursor,
+            line_range,
+            false,
+            frame.comment_width,
+            app.comment_vim_mode_label()
+                .as_ref()
+                .map(|(t, w)| (t.as_str(), *w)),
+            app.supports_keyboard_enhancement,
+        );
+        let box_top_row = *out.line_idx;
+        *out.cursor_line = Some(box_top_row + cursor_info.line_offset);
+        *out.cursor_column = 1 + cursor_info.column;
+        *out.input_box = Some((
+            box_top_row,
+            box_top_row + input_lines.len().saturating_sub(1),
+        ));
+        *out.input_offset = Some((box_top_row, input_lines.len(), 0));
+
+        for mut input_line in input_lines {
+            let indicator = cursor_indicator(*out.line_idx, current_line_idx);
+            input_line
+                .spans
+                .insert(0, Span::styled(indicator, indicator_style));
+            out.lines.push(input_line);
+            *out.line_idx += 1;
+        }
+        push_bar(out.bars, box_top_row, line_range, bar_height);
+    }
+}
+
+/// Render a whole-file Markdown document laid out by `crate::markdown`: the
+/// label row in the hunk-header slot, then each pre-wrapped row, with line
+/// comments after the block their stored line anchors to. Mirrors the
+/// `MarkdownRow` walk in `rebuild_annotations` row for row.
+fn render_markdown_document(
+    out: &mut CommentRows<'_>,
+    content_rows: &mut HashSet<usize>,
+    app: &App,
+    frame: &CommentFrame,
+    (file_idx, path): (usize, &std::path::Path),
+    doc: &crate::markdown::RenderedDocument,
+) {
+    let current_line_idx = frame.current_line_idx;
+    let indicator_style = styles::current_line_indicator_style(&app.theme);
+    let (visible_start, visible_end) = frame.visible;
+
+    // Label row, in the hunk header's annotation slot.
+    let is_hunk_reviewed = app.is_hunk_reviewed(file_idx, 0);
+    let header_style = app
+        .diff_files
+        .get(file_idx)
+        .and_then(|f| f.hunks.first())
+        .map(|hunk| hunk_header_text_and_style(&app.theme, hunk, is_hunk_reviewed).1)
+        .unwrap_or_default();
+    let label = app.markdown_label(file_idx).unwrap_or_default();
+    out.lines.push(Line::from(vec![
+        Span::styled(
+            cursor_indicator_spaced(*out.line_idx, current_line_idx),
+            indicator_style,
+        ),
+        Span::styled(label, header_style),
+    ]));
+    *out.line_idx += 1;
+    if app.should_collapse_hunk(file_idx, 0) {
+        return;
+    }
+
+    let line_comments = app
+        .session
+        .files
+        .get(path)
+        .map(|r| &r.line_comments)
+        .unwrap_or(&crate::ui::diff_view::EMPTY_LINE_COMMENTS);
+    let composing = (app.input_mode == InputMode::Comment
+        && !app.comment_is_file_level
+        && !app.comment_is_review_level
+        && file_idx == app.diff_state.current_file_idx)
+        .then_some(app.comment_line)
+        .flatten()
+        .map(|(line, _)| line);
+    let keys = App::markdown_comment_keys(doc, Some(line_comments), composing);
+
+    // Logical row each document row lands on, so a range bar can reach from a
+    // box up to the first block its range covers.
+    let mut row_line_idx: Vec<usize> = Vec::with_capacity(doc.rows.len());
+    let lw = app.lineno_width();
+    let search_style = styles::search_match_style(&app.theme);
+    let gutter_style = styles::dim_style(&app.theme);
+
+    for (row_idx, row) in doc.rows.iter().enumerate() {
+        let here = *out.line_idx;
+        row_line_idx.push(here);
+        content_rows.insert(here);
+        if here < visible_start || here >= visible_end {
+            out.lines.push(Line::default());
+        } else {
+            let number = doc
+                .starts_block(row_idx)
+                .then(|| doc.row_source(row_idx).map(|r| r.start))
+                .flatten();
+            let gutter = crate::ui::diff_view::markdown_line_number_field(
+                number,
+                lw,
+                app.relative_line_numbers,
+                here,
+                current_line_idx,
+            );
+            let mut spans = vec![
+                Span::styled(cursor_indicator(here, current_line_idx), indicator_style),
+                Span::styled(gutter, gutter_style),
+                Span::raw("  "),
+            ];
+            let content = row.line.spans.clone();
+            match app.search_paint_at(here) {
+                Some(needle) => spans.extend(crate::ui::text_utils::apply_search_highlight_spans(
+                    content,
+                    needle,
+                    search_style,
+                )),
+                None => spans.extend(content),
+            }
+            out.lines.push(Line::from(spans));
+        }
+        *out.line_idx += 1;
+
+        let Some(block) = row.block else {
+            continue;
+        };
+        if doc.blocks[block].rows.end != row_idx + 1 {
+            continue;
+        }
+        let Some(lines) = keys.get(&block) else {
+            continue;
+        };
+        let bar_height = |box_top_row: usize, range: LineRange| {
+            doc.first_row_intersecting(range)
+                .and_then(|first| row_line_idx.get(first))
+                .map_or(0, |&top| box_top_row.saturating_sub(top))
+        };
+        for &line in lines {
+            for side in [LineSide::Old, LineSide::New] {
+                render_line_comments_at(
+                    out,
+                    app,
+                    frame,
+                    (file_idx, path),
+                    line_comments,
+                    (line, side),
+                    &bar_height,
+                );
+            }
         }
     }
 }

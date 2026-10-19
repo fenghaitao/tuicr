@@ -513,13 +513,56 @@ fn copy_text_and_editor_line_come_from_the_rendered_row() {
     assert_eq!(app.get_line_at_cursor(), Some((13, LineSide::New)));
 }
 
+/// Points session storage at a fresh temp dir for this test thread, and puts
+/// it back on drop, so a failing assertion cannot leak the override into the
+/// next test the worker runs. Mirrors `TestReviewsDirGuard` in
+/// `persistence/storage.rs`.
+struct ReviewsDirGuard {
+    dir: tempfile::TempDir,
+}
+
+impl ReviewsDirGuard {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::persistence::storage::set_test_reviews_dir(Some(dir.path().to_path_buf()));
+        Self { dir }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+}
+
+impl Drop for ReviewsDirGuard {
+    fn drop(&mut self) {
+        // Runs before `dir` is removed.
+        crate::persistence::storage::set_test_reviews_dir(None);
+    }
+}
+
+#[test]
+fn the_reviews_dir_override_is_cleared_even_when_a_test_panics() {
+    let mut overridden = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let reviews = ReviewsDirGuard::new();
+        overridden = Some(reviews.path().to_path_buf());
+        panic!("a failing assertion");
+    }));
+    assert!(result.is_err());
+    let after = crate::persistence::storage::get_reviews_dir().expect("reviews dir");
+    assert_ne!(
+        Some(after),
+        overridden,
+        "the override did not outlive the panic"
+    );
+}
+
 /// The durable loop the feature exists for: a comment made in rendered view is
 /// saved to disk, reopens in a fresh app with the same source range in both
 /// views, and `tuicr review comments` reports it in the existing JSON shape.
 #[test]
 fn a_rendered_comment_persists_reopens_and_exports_unchanged() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::persistence::storage::set_test_reviews_dir(Some(dir.path().to_path_buf()));
+    let reviews = ReviewsDirGuard::new();
 
     // Comment in rendered view; `save_comment` autosaves the session.
     let mut app = rendered_spec_app();
@@ -535,7 +578,7 @@ fn a_rendered_comment_persists_reopens_and_exports_unchanged() {
     drop(app);
 
     // Reopen from disk.
-    let store = crate::review_store::ReviewStore::with_reviews_dir(dir.path());
+    let store = crate::review_store::ReviewStore::with_reviews_dir(reviews.path());
     let sessions = store.list_all_sessions().expect("list sessions");
     assert_eq!(sessions.len(), 1, "one persisted session");
     assert_eq!(sessions[0].comment_count, 1);
@@ -603,6 +646,4 @@ fn a_rendered_comment_persists_reopens_and_exports_unchanged() {
     assert_eq!(comment["side"], "new");
     assert_eq!(comment["lifecycle_state"], "local_draft");
     assert_eq!(comment["content"], "Say which errors are retryable.");
-
-    crate::persistence::storage::set_test_reviews_dir(None);
 }

@@ -16,6 +16,8 @@
 - GitHub-style continuous diff in the terminal. Scroll through every changed file in one stream.
 - PR-style comments at the line, range, file, and review level. 
 - Review tracking at file or hunk granularity, persisted across sessions.
+- Rendered Markdown review: read a spec as rendered text with `:markdown` and comment on a
+  paragraph, list item, or table row; comments anchor to the source lines.
 - Three export targets: push a real review to GitHub, GitLab, Gitea, Bitbucket, Azure DevOps, or Gerrit, copy
   structured markdown to your clipboard, or pipe to stdout.
 - Works with git, jj, and mercurial. Reviews uncommitted changes, commit ranges, or any GitHub PR,
@@ -79,7 +81,7 @@ tuicr                       # Pick from a commit selector
 tuicr tui                   # Same TUI, explicit subcommand
 tuicr -w                    # Uncommitted changes (skip selector)
 tuicr -r main..HEAD         # Commit range
-tuicr --file f.md --line 42 # Annotate a file, starting at line 42
+tuicr --file f.md --line 42 # Annotate a file, starting at line 42 (`:markdown` renders it)
 tuicr pr 125                # GitHub, Gitea, Bitbucket, or Azure DevOps PR, or Gerrit change
 tuicr pr 125 --remote up    # Use a named Git remote's fetch URL
 tuicr mr 125                # GitLab MR
@@ -323,6 +325,7 @@ A first-session cheatsheet. Press `?` inside tuicr for the full reference.
 | `y` | Copy review to clipboard |
 | `:edit` | Open focused file in `$EDITOR` |
 | `:submit` | Push review to GitHub, GitLab, Gitea, Bitbucket, Azure DevOps, or Gerrit |
+| `:markdown` | Toggle rendered Markdown for whole `.md` files opened with `--file` or `--all-files` |
 | `:theme` | Open a live-preview theme picker (`/` to filter); `:theme <name>` applies directly. Session-only; set `theme` in `config.toml` to keep it |
 | `Tab` in `:` prompt | Complete or cycle commands |
 | `?` | Toggle full help |

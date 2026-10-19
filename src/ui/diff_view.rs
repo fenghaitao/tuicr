@@ -99,6 +99,25 @@ pub(super) fn unified_line_number_field(
     }
 }
 
+/// Gutter field of a rendered Markdown row: its block's first source line on
+/// the block's first row, blank on continuation and gap rows. Same width as
+/// [`unified_line_number_field`], so rendered rows share the unified gutter.
+pub(super) fn markdown_line_number_field(
+    source_line: Option<u32>,
+    lw: usize,
+    relative_line_numbers: bool,
+    line_idx: usize,
+    current_line_idx: usize,
+) -> String {
+    match source_line {
+        None => " ".repeat(lw + 1),
+        Some(n) if relative_line_numbers => {
+            relative_line_number_field(Some(n), line_idx, current_line_idx, lw)
+        }
+        Some(n) => format!("{n:>lw$} "),
+    }
+}
+
 /// Gutter number for `source_line` under relative numbering: the rendered-row
 /// distance from the cursor, except on the cursor row itself, which keeps its
 /// source line number (Vim's `number` + `relativenumber`).

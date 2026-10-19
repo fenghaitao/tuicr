@@ -20,7 +20,8 @@ src/
 ├── app.rs               # Application state (App struct, InputMode, etc.)
 │   ├── coloring.rs      # Render-time syntax coloring of hunks near the viewport
 │   ├── editor_target.rs # Read-only snapshots of a PR revision for `$EDITOR`
-│   └── file_filter.rs   # File-tree include/exclude regex filters + `/` path search
+│   ├── file_filter.rs   # File-tree include/exclude regex filters + `/` path search
+│   └── markdown_view.rs # `:markdown` rendered view: eligibility, document cache, block placement
 ├── error.rs             # Error types (TuicrError enum)
 ├── editor.rs            # External $EDITOR command construction and launch helpers
 ├── review_store.rs      # Library API for session listing/loading and shared comment insertion
@@ -31,6 +32,11 @@ src/
 │   ├── install.rs       # `tuicr update` orchestration, release verification, and runtime adapter
 │   └── install/         # Install detection, archive extraction, replacement, and focused tests
 ├── tuicrignore.rs       # .tuicrignore loader + diff file filtering (gitignore-style patterns)
+├── markdown/
+│   ├── mod.rs           # RenderedDocument: pre-wrapped rows grouped into source-mapped blocks
+│   ├── render.rs        # Vendored herdr-reviewr renderer (pulldown-cmark → themed rows + source map)
+│   ├── tests.rs         # Renderer/mapping regression cases (adapted from reviewr)
+│   └── LICENSE-reviewr  # Upstream MIT notice for the adapted renderer and tests
 ├── theme/
 │   └── mod.rs           # Theme palette definitions + bundled/local theme resolution
 │
@@ -178,6 +184,28 @@ Repository-managed agent integrations:
 - Keys are focus-scoped via `map_file_tree_mode`: the tree claims `i`/`e`/`I`/`E`/`/`, the
   diff keeps `i` = edit comment and `/` = search diff
 
+**Rendered Markdown** (`src/markdown/`, `src/app/markdown_view.rs`):
+- `:markdown` / `:set markdown[!]` / `:set nomarkdown` and config `markdown_view` toggle
+  `App::markdown_rendered`. It applies only to `App::markdown_eligible` files — `.md`/`.markdown`
+  from a `VcsType::File` source (`--file`, `--all-files`) whose single hunk starts at line 1 —
+  and only in the unified layout. `App::markdown_doc(file_idx)` is the single predicate.
+- Documents are rendered at the unified content width (`viewport_width − unified_gutter`) in
+  `refresh_markdown_docs`, which `rebuild_annotations` runs first; the cache is keyed by content
+  hash, width, and syntax-highlighter `Arc`. A theme switch re-renders in place
+  (`restyle_markdown_docs`) without changing row counts.
+- A rendered file emits a label row in the `HunkHeader { hunk_idx: 0 }` slot, then one
+  `AnnotatedLine::MarkdownRow { file_idx, row_idx, source }` per pre-wrapped row. Each stored
+  line-comment key is placed after the block `RenderedDocument::anchor_block` picks (containing
+  block, else the last block starting before it, else the first), so every comment renders once.
+- **Lockstep:** `rebuild_annotations`, `file_render_body_height`, `render_markdown_document`
+  (`src/ui/diff_unified.rs`), and `annotation_row_height` must agree row for row. Comment boxes
+  for diff rows and rendered rows share `render_line_comments_at` in the unified renderer.
+- Comments made on a rendered row use the block's `LineRange` (`comment_line_range`, side `New`);
+  no new persisted fields. `content_for_side` returns the row text, so mouse selection and visual
+  `y` work unchanged; `get_line_at_cursor` returns the block's first line (editor, `--line`).
+- `src/markdown/render.rs` is vendored from herdr-reviewr (revision recorded in its header, with
+  the list of local adaptations). Keep the MIT notice in `LICENSE-reviewr`.
+
 **InputMode** (`src/app.rs`):
 
 - `Normal` - default navigation mode
@@ -242,6 +270,7 @@ Repository-managed agent integrations:
 - `sha2` + `flate2` + `tar` + `zip`: Verified direct-binary updates and release extraction
 - `self-replace` + `tempfile`: Guarded staging and cross-platform executable swaps
 - `toml`: User config parsing
+- `pulldown-cmark`: Markdown parsing for comment-body highlighting and the rendered Markdown view
 - `arboard`: Clipboard access
 - `ignore`: Gitignore-style matcher for `.tuicrignore`
 - `chrono`: Timestamps

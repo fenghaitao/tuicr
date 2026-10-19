@@ -87,6 +87,13 @@ pub fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     if app.is_single_file_view {
         chunks.push("FOCUS".to_string());
     }
+    if app.markdown_view_active() {
+        chunks.push(match app.markdown_range_at_cursor() {
+            Some(range) if range.is_single() => format!("MARKDOWN \u{00b7} L{}", range.start),
+            Some(range) => format!("MARKDOWN \u{00b7} L{}\u{2013}{}", range.start, range.end),
+            None => "MARKDOWN".to_string(),
+        });
+    }
     if let Some(slug) = app.session_slug() {
         chunks.push(slug);
     }

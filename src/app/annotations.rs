@@ -61,6 +61,7 @@ impl App {
             self.populate_file_line_count_cache();
         }
 
+        self.refresh_markdown_docs();
         self.line_annotations.clear();
         self.colored_hunks.clear();
 
@@ -202,6 +203,51 @@ impl App {
             if file.is_binary || file.hunks.is_empty() {
                 self.line_annotations
                     .push(AnnotatedLine::BinaryOrEmpty { file_idx });
+            } else if let Some(doc) = self.markdown_doc_arc(file_idx) {
+                // Rendered Markdown: the label row in the hunk-header slot,
+                // then one annotation per rendered row, with each stored line
+                // comment after the block its line anchors to. Mirrors
+                // `render_markdown_document` in `ui/diff_unified.rs`.
+                self.line_annotations.push(AnnotatedLine::HunkHeader {
+                    file_idx,
+                    hunk_idx: 0,
+                });
+                if !self.should_collapse_hunk(file_idx, 0) {
+                    let line_comments = self
+                        .session
+                        .files
+                        .get(path)
+                        .map(|r| &r.line_comments)
+                        .cloned()
+                        .unwrap_or_default();
+                    let keys = Self::markdown_comment_keys(&doc, Some(&line_comments), None);
+                    for (row_idx, row) in doc.rows.iter().enumerate() {
+                        self.line_annotations.push(AnnotatedLine::MarkdownRow {
+                            file_idx,
+                            row_idx,
+                            source: doc.row_source(row_idx),
+                        });
+                        let Some(block) = row.block else {
+                            continue;
+                        };
+                        if doc.blocks[block].rows.end != row_idx + 1 {
+                            continue;
+                        }
+                        for &line in keys.get(&block).into_iter().flatten() {
+                            for side in [LineSide::Old, LineSide::New] {
+                                Self::push_comments(
+                                    &mut self.line_annotations,
+                                    file_idx,
+                                    Some(line),
+                                    &line_comments,
+                                    side,
+                                    self.diff_state.viewport_width,
+                                    commit_set.as_ref(),
+                                );
+                            }
+                        }
+                    }
+                }
             } else {
                 // Get line comments for this file
                 let line_comments = self

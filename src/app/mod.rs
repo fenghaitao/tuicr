@@ -351,6 +351,14 @@ pub enum AnnotatedLine {
         /// The root comment or reply whose rendered box row this is.
         comment_idx: usize,
     },
+    /// One pre-wrapped row of a rendered Markdown document. `source` is the
+    /// row's block range (`None` for a blank gap row); comments made here are
+    /// stored against it.
+    MarkdownRow {
+        file_idx: usize,
+        row_idx: usize,
+        source: Option<LineRange>,
+    },
     /// Binary or empty file indicator
     BinaryOrEmpty { file_idx: usize },
     /// Spacing between files
@@ -485,6 +493,7 @@ pub fn annotation_file_idx(annotation: &AnnotatedLine) -> Option<usize> {
         | AnnotatedLine::DiffLine { file_idx, .. }
         | AnnotatedLine::SideBySideLine { file_idx, .. }
         | AnnotatedLine::LineComment { file_idx, .. }
+        | AnnotatedLine::MarkdownRow { file_idx, .. }
         | AnnotatedLine::BinaryOrEmpty { file_idx } => Some(*file_idx),
         AnnotatedLine::PrInfoLine { .. }
         | AnnotatedLine::IssueCommentsHeader
@@ -1360,6 +1369,15 @@ pub struct App {
     /// `PRISTINE · N files` chip in the status bar and prevents that chip
     /// from showing in the regular `--file <dir>` directory mode.
     pub is_pristine_mode: bool,
+    /// Rendered Markdown view (`:markdown`): whole-file Markdown documents
+    /// render as laid-out rows instead of source lines. Session-only, seeded
+    /// from `markdown_view`. See `app/markdown_view.rs`.
+    pub markdown_rendered: bool,
+    /// Rendered documents by file index, refreshed by `rebuild_annotations`.
+    pub(crate) markdown_docs: HashMap<usize, markdown_view::MarkdownDocEntry>,
+    /// Content hash each Markdown path was last rendered from, so a reload
+    /// that changes a commented document can say so.
+    pub(crate) markdown_seen_hashes: HashMap<PathBuf, u64>,
     /// `true` when single-file view is active. Renders only the currently
     /// focused file in the diff panel instead of the continuous-scroll
     /// concatenation. Toggled via `:focus` or `<leader>f`.
@@ -1913,6 +1931,7 @@ mod editor_target;
 mod file_filter;
 mod gaps;
 mod init;
+mod markdown_view;
 mod modes;
 mod navigation;
 mod pr;

@@ -105,6 +105,22 @@ pub(crate) fn annotation_row_height(app: &App, idx: usize) -> usize {
             wrap_side_max(&content, &content, content_width)
         }
 
+        // Pre-wrapped to the content column, so normally one row; measured with
+        // the renderer's gutter-hanging wrap pass in case graphemes disagree.
+        AnnotatedLine::MarkdownRow {
+            file_idx, row_idx, ..
+        } if app.wrap_style == WrapStyle::Gutter
+            && viewport_width > crate::app::unified_gutter(app.lineno_width()) as usize =>
+        {
+            let content_width =
+                viewport_width - crate::app::unified_gutter(app.lineno_width()) as usize;
+            wrap_len(
+                app.markdown_row_text(*file_idx, *row_idx)
+                    .unwrap_or_default(),
+                content_width,
+            )
+        }
+
         AnnotatedLine::DiffLine { .. } | AnnotatedLine::ExpandedContext { .. }
             if app.diff_view_mode == DiffViewMode::Unified
                 && app.wrap_style == WrapStyle::Gutter
@@ -267,19 +283,43 @@ fn full_row_text(app: &App, idx: usize, annotation: &AnnotatedLine) -> String {
 
         AnnotatedLine::HunkHeader { file_idx, hunk_idx } => {
             let text = app
-                .diff_files
-                .get(*file_idx)
-                .and_then(|f| f.hunks.get(*hunk_idx))
-                .map(|h| {
-                    diff_view::hunk_header_text_and_style(
-                        &app.theme,
-                        h,
-                        app.is_hunk_reviewed(*file_idx, *hunk_idx),
-                    )
-                    .0
+                .markdown_label(*file_idx)
+                .or_else(|| {
+                    app.diff_files
+                        .get(*file_idx)
+                        .and_then(|f| f.hunks.get(*hunk_idx))
+                        .map(|h| {
+                            diff_view::hunk_header_text_and_style(
+                                &app.theme,
+                                h,
+                                app.is_hunk_reviewed(*file_idx, *hunk_idx),
+                            )
+                            .0
+                        })
                 })
                 .unwrap_or_default();
             format!("{indicator_spaced}{text}")
+        }
+
+        AnnotatedLine::MarkdownRow {
+            file_idx, row_idx, ..
+        } => {
+            let starts = app
+                .markdown_doc(*file_idx)
+                .and_then(|doc| doc.starts_block(*row_idx).then(|| doc.row_source(*row_idx)))
+                .flatten()
+                .map(|range| range.start);
+            let gutter = diff_view::markdown_line_number_field(
+                starts,
+                lw,
+                app.relative_line_numbers,
+                idx,
+                app.diff_state.cursor_line,
+            );
+            let text = app
+                .markdown_row_text(*file_idx, *row_idx)
+                .unwrap_or_default();
+            format!("{indicator}{gutter}  {text}")
         }
 
         AnnotatedLine::Expander { gap_id, direction } => {

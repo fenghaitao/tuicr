@@ -25,6 +25,7 @@ theme_dark = "gruvbox-dark"
 theme_light = "gruvbox-light"
 
 diff_view = "side-by-side"
+markdown_view = "source"
 ignore_whitespace = "auto" # or true / false; omitted defaults to false
 commit_order = "descending"
 initial_commit_selection = "all"
@@ -90,6 +91,7 @@ session_header = true
 | `theme_dark`               | (none)       | Theme name for dark appearance (paired with `theme_light`).                                                                                                |
 | `theme_light`              | (none)       | Theme name for light appearance (paired with `theme_dark`).                                                                                                |
 | `diff_view`                | `unified`    | `unified` or `side-by-side`. Toggle in-app with `:diff`.                                                                                                   |
+| `markdown_view`            | `source`     | `source` or `rendered`: how whole Markdown files opened with `--file` or `--all-files` start. Rendered view uses the unified layout. Toggle in-app with `:markdown`. See [docs/KEYBINDINGS.md](KEYBINDINGS.md#rendered-markdown). |
 | `commit_order`             | `descending` | Inline commit selector order: `descending` (newest on top, the default) or `ascending` (oldest on top).                                                    |
 | `initial_commit_selection` | `all`        | Which commits are selected when a multi-commit review first opens: `all`, or `oldest` to start on just the oldest commit and walk forward with `(` / `)`.  |
 | `ignore_whitespace`        | `false`      | Whitespace comparison for local Git, jj, and hg diffs: `false` compares normally, `true` ignores all whitespace, and `"auto"` chooses by file extension. PR diffs are unchanged. See [Whitespace comparison](#whitespace-comparison). |

@@ -90,7 +90,15 @@ impl App {
             DiffViewMode::Unified => "unified",
             DiffViewMode::SideBySide => "side-by-side",
         };
-        self.set_message(format!("Diff view mode: {mode_name}"));
+        let markdown_note = if self.markdown_rendered
+            && self.diff_view_mode == DiffViewMode::SideBySide
+            && self.diff_files.iter().any(|f| self.markdown_eligible(f))
+        {
+            " (Markdown shows as source)"
+        } else {
+            ""
+        };
+        self.set_message(format!("Diff view mode: {mode_name}{markdown_note}"));
         self.rebuild_annotations();
     }
 

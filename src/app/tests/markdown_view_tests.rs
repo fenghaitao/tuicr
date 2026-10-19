@@ -92,19 +92,28 @@ fn file(path: &str, contents: &[&str]) -> DiffFile {
     }
 }
 
-fn app_with(files: Vec<DiffFile>, vcs_type: VcsType) -> App {
-    let vcs_info = VcsInfo {
+fn vcs_info(vcs_type: VcsType) -> VcsInfo {
+    VcsInfo {
         root_path: PathBuf::from("/tmp/specs"),
         head_commit: "head".into(),
         branch_name: None,
         vcs_type,
-    };
+    }
+}
+
+fn app_with(files: Vec<DiffFile>, vcs_type: VcsType) -> App {
+    let info = vcs_info(vcs_type);
     let session = ReviewSession::new(
-        vcs_info.root_path.clone(),
-        vcs_info.head_commit.clone(),
-        vcs_info.branch_name.clone(),
+        info.root_path.clone(),
+        info.head_commit.clone(),
+        info.branch_name.clone(),
         SessionDiffSource::WorkingTree,
     );
+    app_with_session(files, vcs_type, session)
+}
+
+fn app_with_session(files: Vec<DiffFile>, vcs_type: VcsType, session: ReviewSession) -> App {
+    let vcs_info = vcs_info(vcs_type);
     let mut app = App::build(
         Box::new(StubVcs(vcs_info.clone())),
         vcs_info,
@@ -502,4 +511,98 @@ fn copy_text_and_editor_line_come_from_the_rendered_row() {
         Some("Final bold words.")
     );
     assert_eq!(app.get_line_at_cursor(), Some((13, LineSide::New)));
+}
+
+/// The durable loop the feature exists for: a comment made in rendered view is
+/// saved to disk, reopens in a fresh app with the same source range in both
+/// views, and `tuicr review comments` reports it in the existing JSON shape.
+#[test]
+fn a_rendered_comment_persists_reopens_and_exports_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::persistence::storage::set_test_reviews_dir(Some(dir.path().to_path_buf()));
+
+    // Comment in rendered view; `save_comment` autosaves the session.
+    let mut app = rendered_spec_app();
+    app.diff_state.cursor_line = row_with(&app, "A paragraph");
+    comment_on_cursor(&mut app, "Say which errors are retryable.");
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|m| m.content == "Comment added to lines 3-5"),
+        "{:?}",
+        app.message
+    );
+    drop(app);
+
+    // Reopen from disk.
+    let store = crate::review_store::ReviewStore::with_reviews_dir(dir.path());
+    let sessions = store.list_all_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 1, "one persisted session");
+    assert_eq!(sessions[0].comment_count, 1);
+    let session_path = sessions[0].session_ref.path().to_path_buf();
+    let loaded = store
+        .get_review(&sessions[0].session_ref)
+        .expect("load session");
+
+    let expected = vec![(LineRange::new(3, 5), Some(LineSide::New))];
+    let mut reopened = app_with_session(vec![file("spec.md", SPEC)], VcsType::File, loaded);
+    assert_eq!(stored_targets(&reopened), expected);
+
+    // Source view: the box follows line 5, the range's end.
+    let after_line_5 = source_row(&reopened, 5) + 1;
+    assert!(matches!(
+        reopened.line_annotations[after_line_5],
+        AnnotatedLine::LineComment { line: 5, .. }
+    ));
+    // Rendered view: the box follows the paragraph's last row.
+    reopened.set_markdown_rendered(true);
+    let after_paragraph = row_with(&reopened, "five.") + 1;
+    assert!(matches!(
+        reopened.line_annotations[after_paragraph],
+        AnnotatedLine::LineComment { line: 5, .. }
+    ));
+    assert_eq!(stored_targets(&reopened), expected);
+
+    // `tuicr review comments --session <path>`: the existing JSON shape.
+    let mut out = Vec::new();
+    crate::review_cli::run_with_writer(
+        crate::cli::ReviewCommand::Comments {
+            session: session_path.display().to_string(),
+            repo: PathBuf::from("."),
+        },
+        &mut out,
+    )
+    .expect("review comments");
+    let json: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    let comments = json.as_array().expect("a JSON array");
+    assert_eq!(comments.len(), 1);
+    let comment = comments[0].as_object().expect("an object");
+    let mut keys: Vec<&str> = comment.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "author",
+            "comment_type",
+            "content",
+            "created_at",
+            "end_line",
+            "id",
+            "lifecycle_state",
+            "location",
+            "path",
+            "side",
+            "start_line",
+        ],
+        "no rendered-view fields leak into the export"
+    );
+    assert_eq!(comment["location"], "spec.md:3-5");
+    assert_eq!(comment["path"], "spec.md");
+    assert_eq!(comment["start_line"], 3);
+    assert_eq!(comment["end_line"], 5);
+    assert_eq!(comment["side"], "new");
+    assert_eq!(comment["lifecycle_state"], "local_draft");
+    assert_eq!(comment["content"], "Say which errors are retryable.");
+
+    crate::persistence::storage::set_test_reviews_dir(None);
 }
